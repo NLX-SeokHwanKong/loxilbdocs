@@ -61,9 +61,7 @@ Thanos extends Prometheus to provide:
 +----------------------------+
 ```
 
-## 🚀 Deployment Guide
-### **1️. Install Node Exporter**
----
+## 1️. Install Node Exporter
 ```sh
 wget https://raw.githubusercontent.com/loxilb-io/kube-loxilb/blob/main/manifest/in-cluster-prod-monitoring/node-exporter-ds.yaml
 
@@ -71,8 +69,7 @@ wget https://raw.githubusercontent.com/loxilb-io/kube-loxilb/blob/main/manifest/
 kubectl apply -f node-exporter-ds.yaml
 ```
 
-### **2️. Deploy Alert manager**
----
+## 2️. Deploy Alert manager
 🔧 Customizing Alert manager Configuration
 Modify **email alerts** in `alert-manager.yaml`:
 ```yaml
@@ -153,8 +150,7 @@ receivers:
 - **Slack Configuration**: [Prometheus Alertmanager Slack Setup](https://prometheus.io/docs/alerting/latest/configuration/#slack_config)
 - **Webhook Integration**: [Prometheus Alertmanager Webhooks](https://prometheus.io/docs/alerting/latest/configuration/#webhook_config)
 
-Install of Alert Manager
----
+### Install of Alert Manager
 
 ```sh
 wget https://raw.githubusercontent.com/loxilb-io/kube-loxilb/blob/main/manifest/in-cluster-prod-monitoring/alert-manager.yaml
@@ -162,10 +158,10 @@ wget https://raw.githubusercontent.com/loxilb-io/kube-loxilb/blob/main/manifest/
 kubectl apply -f alert-manager.yaml
 ```
 
-### **3️. Deploy Thanos Components (thanos.yaml)**
----
+## 3️. Deploy Thanos Components (thanos.yaml)
+
 (1) **Customizing Thanos Configuration(Used by Thanos Sidecar)**:
----
+
 This Prometheus is set up to work with Thanos and collect metrics efficiently.
 ```yaml
 apiVersion: v1
@@ -213,7 +209,6 @@ This Thanos Sidecar ensures that Prometheus data is **stored and accessible long
 📌 **Reference:** [Thanos Sidecar Docs](https://thanos.io/tip/components/sidecar/)
 
 (2) **Configuring Alerting Configuration**
----
 ```yaml
     alerting:
       alertmanagers:
@@ -230,7 +225,7 @@ This Thanos Sidecar ensures that Prometheus data is **stored and accessible long
 | timeout: 10s | How long Prometheus waits before failing alert delivery | Increase if your Alertmanager is slow |
 
 (3) **Configuring Prometheus Scrape Jobs**
----
+
 These jobs define what **metrics sources** are collected.
 ```yaml
     scrape_configs:
@@ -295,8 +290,8 @@ kubectl apply -f thanos.yaml
 kubectl apply -f thanos-ruler-deployment.yaml
 ```
 
-### **4️. Install Thanos Ruler(thanos-ruler-deployment.yaml)**
----
+## 4️. Install Thanos Ruler(thanos-ruler-deployment.yaml)
+
 Thanos Ruler evaluates **alerting and recording rules** centrally, instead of relying on individual Prometheus instances.
 
 #### **🚀 Why Use Thanos Ruler?**
@@ -356,10 +351,9 @@ kubectl apply -f thanos-ruler-deployment.yaml
 - **Alerting & Recording Rules:** [Prometheus Rule Configuration](https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/)
 - **Querying Past Data with Thanos Querier:** [Thanos Query Docs](https://thanos.io/tip/components/query/)
 
-### **4️. Install Grafana(thanos-grafana.yaml)**
----
+## 5. Install Grafana(thanos-grafana.yaml)
+
 Installation of Grafana
----
 
 ```sh
 kubectl apply -f https://raw.githubusercontent.com/loxilb-io/kube-loxilb/blob/main/manifest/in-cluster-prod-monitoring/thanos-grafana.yaml
