@@ -34,9 +34,9 @@ loxilb works as a L4 load-balancer/service-proxy by default. Although L4 load-ba
 Additionally, loxilb also supports:   
 - [x] kube-proxy replacement with eBPF(full cluster-mesh implementation for Kubernetes)   
 - [x] Ingress Support   
-- [x] Kubernetes Gateway API
-- [x] HA capable Egress for Kubernetes
-- [ ] Kubernetes Network Policies (in-progress)  
+- [x] Kubernetes Gateway API    
+- [x] HA capable Egress for Kubernetes    
+- [ ] Kubernetes Network Policies (in-progress)    
 
 ## Telco-Cloud with loxilb
 For deploying telco-cloud with cloud-native functions, loxilb can be used as a SCP(service communication proxy). SCP is a communication proxy defined by [3GPP](https://www.etsi.org/deliver/etsi_ts/129500_129599/129500/16.04.00_60/ts_129500v160400p.pdf) and aimed at optimizing telco micro-services running in cloud-native environment. Read more about it [here](https://dev.to/nikhilmalik/5g-service-communication-proxy-with-loxilb-4242).    
@@ -150,6 +150,7 @@ Telco-cloud requires load-balancing and communication across various interfaces/
 - [Developer's guide to loxicmd](cmd-dev.md)
 - [Developer's guide to loxilb API](api-dev.md)
 - [HTTPS guide for loxilb API](https.md)
+- [OAuth2 guide for loxilb API](oauth2.md)
 - [API Reference - loxilb web-Api](api.md)
 - [Performance Reports](perf.md)
 - [Development Roadmap](roadmap.md)
@@ -183,7 +184,8 @@ Telco-cloud requires load-balancing and communication across various interfaces/
 - [LoxiLB eBPF deep-dive](https://free5gc.org/blog/20241203/20241203)
 
 ## Research Papers (featuring loxilb)
-- [Mitigating Spectre-PHT using Speculation Barriers in Linux BPF](https://arxiv.org/pdf/2405.00078)   
+- [Mitigating Spectre-PHT using Speculation Barriers in Linux BPF](https://arxiv.org/pdf/2405.00078)
+- [A Scalable and Fault-Tolerant 5G Core on Kubernetes](https://www.cse.iitb.ac.in/~mythili/research/papers/2025-5gcore-k8s.pdf)   
 
 ## Latest CICD Status
 <div class="grid cards" markdown>
