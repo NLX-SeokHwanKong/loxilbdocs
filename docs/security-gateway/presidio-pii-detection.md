@@ -71,12 +71,16 @@ Request arrives at AI Gateway
 
 ## Configuration
 
-Presidio configuration is managed through the shared memory segment:
+Presidio configuration is managed through the shared memory segment — there is no REST API endpoint for Presidio configuration. All settings are read from shared memory by the C dataplane layer.
 
 - **Shared memory path:** `/dev/shm/loxilb_presidio_config`
 - **Size:** 20KB
 - **Analyzer endpoint:** `presidio-analyzer:50051` (default)
 - **Anonymizer endpoint:** Separate service (default port varies by deployment)
+- **Key config struct:** `PresidioConfig` from `pkg/presidio/config.go`
+
+!!! note "Configuration update behavior"
+    Configuration updates via shared memory take effect on the next request cycle, not mid-request. The Go layer writes to `/dev/shm/loxilb_presidio_config` using `unix.Msync(MS_SYNC)`, and the C dataplane reads this continuously. For production configuration changes during high traffic, deploy during a maintenance window or low-traffic period to avoid brief gaps in PII detection.
 
 (Source: pkg/presidio/config.go)
 
@@ -143,6 +147,8 @@ Gateway-layer PII interception serves as a **technical control for data minimiza
 
 ## See Also
 
-- [LlamaFirewall](llamafirewall.md) — Complementary semantic AI security scanning
+- [Security Gateway Overview](overview.md) — Fail-mode comparison table, port allocation for all security services
+- [LlamaFirewall](llamafirewall.md) — Complementary semantic AI content safety (uses port 50052, Presidio uses 50051)
 - [AI Gateway Overview](../ai-gateway/overview.md) — Full traffic flow and architecture
 - [Rate Limiting](rate-limiting.md) — Rate limiting configuration
+- [Configuration Reference](configuration-reference.md) — Quick-reference for all Security Gateway config fields
