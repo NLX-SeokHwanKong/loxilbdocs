@@ -940,7 +940,7 @@ curl http://localhost:11111/netlox/v1/metrics/requestcount \
 # Response (200): Prometheus-formatted metric data
 ```
 
-For Prometheus scrape configuration and Grafana dashboard setup, see [Monitoring Setup](../operations/monitoring-setup.md).
+For Prometheus scrape configuration and Grafana dashboard setup, see [Monitoring Setup](../operations/monitoring.md).
 
 ## CORS Configuration
 

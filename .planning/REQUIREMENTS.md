@@ -54,8 +54,8 @@ Requirements for customer-ready v1 documentation at docs.netlox.io/latest.
 
 ### Reference
 
-- [ ] **REF-01**: Create enterprise API reference aligned with swagger.yml
-- [ ] **REF-02**: Create loxicmd-enterprise CLI reference
+- [x] **REF-01**: Create enterprise API reference aligned with swagger.yml
+- [x] **REF-02**: Create loxicmd-enterprise CLI reference
 
 ## v2 Requirements
 
@@ -125,8 +125,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | NETG-06 | Phase 4 | Pending |
 | OPS-01 | Phase 4 | Pending |
 | OPS-02 | Phase 4 | Pending |
-| REF-01 | Phase 5 | Pending |
-| REF-02 | Phase 5 | Pending |
+| REF-01 | Phase 5 | Complete |
+| REF-02 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 32 total

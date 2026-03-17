@@ -97,11 +97,11 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. A developer integrating with the enterprise API can find every enterprise endpoint (including user management, plugin, and catalog sync APIs not in community SwaggerHub) documented with request/response examples in the API reference
   2. An operator can look up every enterprise CLI command and flag in the CLI reference without consulting source code
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: Create enterprise API reference (REF-01) — audit pkg/proto/ for enterprise endpoints not in community SwaggerHub, document all enterprise API additions aligned with swagger.yml
-- [ ] 05-02: Create loxicmd-enterprise CLI reference (REF-02) — document all enterprise CLI extensions and commands
+- [ ] 05-01-PLAN.md — Write enterprise API reference: all enterprise-only endpoints from swagger.yml with authentication flow, request/response examples, and source annotations (Wave 1)
+- [ ] 05-02-PLAN.md — Write enterprise CLI reference: all loxicmd-enterprise commands with global flags, authentication workflow, enterprise badges, and usage examples (Wave 1)
 
 ## Progress
 
