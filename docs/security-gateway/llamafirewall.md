@@ -133,6 +133,8 @@ For the full AI Gateway traffic flow, see [AI Gateway Overview](../ai-gateway/ov
 
 ## See Also
 
-- [PII Detection with Presidio](presidio-pii-detection.md) — Complementary structural PII detection
-- [AI Gateway Overview](../ai-gateway/overview.md) — Full traffic flow diagram
+- [Security Gateway Overview](overview.md) — Fail-mode comparison table showing LlamaFirewall fail-open vs OPA fail-closed defaults. See also the [port allocation table](overview.md#port-allocation) — LlamaFirewall uses port 50052, Presidio uses port 50051.
+- [PII Detection with Presidio](presidio-pii-detection.md) — Complementary structural PII detection. Presidio catches formatted PII (emails, SSNs), LlamaFirewall catches contextual PII exposure.
+- [AI Gateway Overview](../ai-gateway/overview.md) — Full traffic flow diagram showing LlamaFirewall position in the enforcement pipeline
 - [Rate Limiting](rate-limiting.md) — Rate limiting configuration
+- [Configuration Reference](configuration-reference.md) — Quick-reference for all Security Gateway config fields
