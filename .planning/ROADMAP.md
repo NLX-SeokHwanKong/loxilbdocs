@@ -65,14 +65,14 @@ Plans:
   3. A security reviewer can read the LlamaFirewall page and find a documented threat model (prompt injection, content filtering) before reaching any configuration block
   4. A DevOps engineer can configure rate limiting per endpoint using only the documented YAML, traced to pkg/ratelimit/
   5. An architect reviewing the secure dataplane overview can understand how IPsec, mTLS, and eBPF combine, with separate deep-dive pages for IPsec and mTLS configuration
-**Plans**: TBD
+**Plans**: 5 plans
 
 Plans:
-- [ ] 03-01: Write Security Gateway concepts page and overview (SECG-05) — secure dataplane overview, IPsec + mTLS + eBPF architectural comparison
-- [ ] 03-02: Document OPA policy enforcement and Presidio PII detection (SECG-01, SECG-02) — extract configs from pkg/opa/ and pkg/presidio/
-- [ ] 03-03: Document LlamaFirewall AI safety (SECG-03) — threat model first, then filter configuration from pkg/llamafirewall/
-- [ ] 03-04: Document rate limiting and access controls (SECG-04, SECG-09, SECG-10) — rate limiting from pkg/ratelimit/, SYN flood protection, IP filtering
-- [ ] 03-05: Document IPsec, mTLS, and Security Gateway deployment scenarios (SECG-06, SECG-07, SECG-08)
+- [ ] 03-01-PLAN.md — Write Security Gateway overview landing page and secure dataplane concepts page (Wave 1)
+- [ ] 03-02-PLAN.md — Write OPA policy enforcement page and enhance Presidio PII detection page (Wave 2)
+- [ ] 03-03-PLAN.md — Enhance LlamaFirewall page with Security Gateway cross-references (Wave 2)
+- [ ] 03-04-PLAN.md — Write rate limiting, SYN flood protection, and IP filtering pages (Wave 2)
+- [ ] 03-05-PLAN.md — Write IPsec, mTLS, deployment scenarios, and configuration reference pages (Wave 3)
 
 ### Phase 4: Network Gateway and Operations
 **Goal**: The Network Gateway pillar is documented as the high-performance data plane foundation of the unified gateway, operators can manage users and monitor the system end-to-end, and a complete enterprise Getting Started path exists for the full product
