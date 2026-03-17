@@ -1,0 +1,8 @@
+exclude = [
+  "https://www.loxilb.io/",
+  "https://join.slack.com/",
+  "https://www.linkedin.com/",
+]
+timeout = 20
+max_retries = 3
+accept = [200, 206, 429]
