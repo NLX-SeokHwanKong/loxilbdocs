@@ -82,13 +82,13 @@ Plans:
   1. A network architect can find documentation for each advanced network feature (Egress LB, DSR, NAT64, HTTPS proxy modes, HTTP/2 proxy, SCTP multi-homing) with configuration examples
   2. An enterprise administrator can follow the user management page to configure RBAC, namespace isolation, and multi-tenant access control using configs from pkg/user/
   3. An SRE can follow the monitoring setup page to configure Prometheus metrics and import Grafana dashboards for enterprise features
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 04-01: Document Egress LB, DSR, and NAT64 (NETG-01, NETG-02, NETG-03)
-- [ ] 04-02: Document HTTPS proxy modes, HTTP/2 proxy, and SCTP multi-homing (NETG-04, NETG-05, NETG-06)
-- [ ] 04-03: Document User management (OPS-01) — RBAC, namespace isolation, multi-tenant patterns from pkg/user/
-- [ ] 04-04: Document Monitoring setup (OPS-02) — Prometheus metrics, Grafana dashboards for enterprise features
+- [ ] 04-01-PLAN.md — Write Network Gateway overview, Egress LB, DSR, and NAT64 pages (Wave 1)
+- [ ] 04-02-PLAN.md — Write HTTPS proxy modes, HTTP/2 proxy, and SCTP multi-homing pages (Wave 1)
+- [ ] 04-03-PLAN.md — Write User Management page: three auth modes, RBAC, password policy, API keys (Wave 2)
+- [ ] 04-04-PLAN.md — Write Monitoring Setup page: Prometheus metrics, scrape config, Grafana guidance (Wave 2)
 
 ### Phase 5: Reference
 **Goal**: Enterprise engineers have a complete, authoritative reference for the enterprise API and CLI — covering all endpoints and commands added in the enterprise binary — enabling production operations and integration without support escalation
