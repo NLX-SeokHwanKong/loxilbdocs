@@ -121,7 +121,7 @@ loxicmd create lb 20.20.20.1 --tcp=2020:8080 --endpoints=31.31.31.1:1,32.32.32.1
 - By default loxilb does not do active endpoint monitoring i.e it will continue to select end-points which might be inactive   
 - This is due to the fact kubernetes also has its own service monitoring mechanism and it can notify loxilb of any such endpoint health state    
 - Based on user's requirements, one can specify active endpoint checks using "--monitor" flag   
-- loxilb has extensive endpoint monitoring methods. Further details can be found in endpoint [section]("https://github.com/loxilb-io/loxilbdocs/edit/main/docs/cmd.md#endpoint)   
+- loxilb has extensive endpoint monitoring methods. Further details can be found in endpoint [section](https://github.com/loxilb-io/loxilbdocs/edit/main/docs/cmd.md#endpoint)   
 
 
 ##### Load-balancer yaml example

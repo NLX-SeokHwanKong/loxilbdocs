@@ -74,7 +74,7 @@ To enable the user authentication service and configure MySQL database connectio
 Note: The databasepasswordpath option reads the plain text value from the specified file as the password. Please be cautious about file security and potential leaks. It is recommended to set the file permissions to 600 using `chmod 600 /etc/loxilb/mysql_password`. 
 ### Database Initialization
 
-To use LoxiLB's authentication feature, the necessary database and tables must be set up in MySQL. Execute the SQL script provided [here](docs/db_setup.md) to initialize the database.
+To use LoxiLB's authentication feature, the necessary database and tables must be set up in MySQL. Execute the SQL script provided [here](db_setup.md) to initialize the database.
 
 ### Token Issuance Process
 

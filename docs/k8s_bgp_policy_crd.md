@@ -130,7 +130,7 @@ Here, we show how to configure policy via configuration file.
 ## Route Server Policy Model
 
 The following figure shows how policy works in
-[route server BGP configuration](route-server.md).
+[route server BGP configuration](https://github.com/osrg/gobgp/blob/master/docs/sources/route-server.md).
 
 ![route server policy model](photos/policy.png)
 

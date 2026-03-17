@@ -283,3 +283,22 @@ td:nth-child(even) {
     width: 1000px
 
 }
+
+/* Enterprise Feature admonition */
+:root {
+  --md-admonition-icon--enterprise: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>');
+}
+.md-typeset .admonition.enterprise,
+.md-typeset details.enterprise {
+  border-color: rgb(98, 0, 238);
+}
+.md-typeset .enterprise > .admonition-title,
+.md-typeset .enterprise > summary {
+  background-color: rgba(98, 0, 238, 0.1);
+}
+.md-typeset .enterprise > .admonition-title::before,
+.md-typeset .enterprise > summary::before {
+  background-color: rgb(98, 0, 238);
+  -webkit-mask-image: var(--md-admonition-icon--enterprise);
+          mask-image: var(--md-admonition-icon--enterprise);
+}

@@ -24,7 +24,7 @@ Address Family: IPv4/IPv6.
 Additional Fields: Checksum, length, or custom data.
 By encoding this metadata, LoxiLB ensures transparency, enhances visibility, and enables accurate logging and troubleshooting in complex environments.
 
-LoxiLB leverages [eBPF](ebpf.io) technology to generate Proxy Protocol headers dynamically with minimal performance overhead. However, before enabling Proxy Protocol v2, ensure that server-side applications support this feature to avoid compatibility issues.
+LoxiLB leverages [eBPF](https://ebpf.io) technology to generate Proxy Protocol headers dynamically with minimal performance overhead. However, before enabling Proxy Protocol v2, ensure that server-side applications support this feature to avoid compatibility issues.
 
 ## How to create a Service enabling Proxy Protocol v2
 
