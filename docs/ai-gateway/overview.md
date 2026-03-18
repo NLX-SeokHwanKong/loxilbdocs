@@ -24,7 +24,6 @@ Networking engineers are familiar with eBPF for high-performance packet processi
 
 This architecture means that API key validation, rate limiting, and security scanning all happen **before** traffic reaches the backend LLM — at data-plane speed, not application-layer speed.
 
-(Source: architecture from packet-processing-pipeline.md, ai_gateway_dp.go, ai_security.go CGO bridge pattern)
 
 ## Key Capabilities
 
@@ -71,7 +70,6 @@ sequenceDiagram
     Note over Sock,Go: On stream completion → llb_ai_token_quota_consume()
 ```
 
-(Source: ai_gateway_dp.go:195-329 traffic flow)
 
 ## Prerequisites
 
@@ -79,8 +77,6 @@ Before configuring any AI Gateway feature, ensure the following:
 
 !!! warning "Required: FullProxy Mode"
     All AI Gateway features require `mode: 4` (LBModeFullProxy) and `backend_protocol: "http1"`. Other LB modes perform L4 load balancing only and cannot inspect HTTP bodies for model routing, API key validation, or KV cache matching.
-
-    Source: common/common.go:885
 
 - **loxilb-enterprise binary** — The AI Gateway is an enterprise-only feature. See [Installation](../getting-started/installation.md) for setup instructions.
 - **FullProxy mode** — Set `mode: 4` on your LB service. This enables L7 proxy mode with HTTP body inspection, unlike L4 DNAT modes.
@@ -96,7 +92,64 @@ loxilb provides three load balancing selection modes optimized for LLM traffic. 
 | GPU-Aware | `9` | LbSelGPUAware | Uses real-time GPU queue depth and cache usage metrics from vLLM. Best for batch/independent queries where throughput matters more than cache locality. |
 | Weighted Round-Robin with Hash | `10` | LbSelWRRHash | Combines weighted round-robin with hash-based distribution. For mixed workloads or when transitioning from standard LB. |
 
-(Source: common/common.go:674-699)
+
+## REST API Config
+
+The AI Gateway is configured through the loxilb REST API. Three main endpoint groups cover all AI Gateway operations:
+
+- **API Key Management** (`/config/ai/apikey`) — Create, list, and revoke API keys for tenant access control. See [API Key Management](api-key-management.md) for full examples.
+- **Tenant Rate Limits** (`/config/ai/tenant/ratelimit`) — Set per-tenant request and token rate limits. See [SSE Quota Management](sse-quota-management.md) for full examples.
+- **GPU and LLM Catalog** (`/config/gpu/*`, `/config/llm-catalogs`) — Enable GPU-aware load balancing, query GPU status, and manage LLM catalog profiles. See [vLLM Integration](vllm-integration.md) and [Model Load Balancing](model-load-balancing.md) for configuration.
+
+AI Gateway features are activated on LB service rules created via `POST /config/services` with `mode: 4` (FullProxy) and feature-specific `serviceArguments`. Each feature page documents the exact JSON body.
+
+To check AI Gateway status, query the GPU feature endpoint:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/gpu/status \
+  -H "Authorization: Bearer <token>"
+
+# Response (200):
+# {"gpu_aware_enabled": true, "active_scrapers": 3}
+```
+
+## Verify
+
+Confirm the AI Gateway is operational by listing configured services:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>"
+```
+
+The response should include your AI Gateway service rules with `mode: 4` and the relevant `serviceArguments` fields. You can also verify GPU-aware mode:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/gpu/status \
+  -H "Authorization: Bearer <token>"
+
+# Expected: {"gpu_aware_enabled": true, "active_scrapers": N}
+```
+
+## Troubleshooting
+
+**Gateway not responding to API requests**
+
+- Confirm the loxilb-enterprise service is running: `systemctl status loxilb`
+- Check that the API port (default 11111) is reachable: `curl http://loxilb:11111/netlox/v1/config/services`
+- Verify FullProxy mode is set (`mode: 4`) on your LB service rule
+
+**API key rejected (401/403)**
+
+- Verify the key exists and is enabled: `GET /config/ai/apikey/<key_id>`
+- Check `expires_at` has not passed
+- Confirm `allowed_models` includes the requested model
+
+**Backend LLM not receiving traffic**
+
+- Verify endpoints are healthy in the service rule: `GET /config/services`
+- Check that `backend_protocol` is set to `"http1"` (required for AI Gateway)
+- Review loxilb logs for connection errors to backend endpoints
 
 ## Next Steps
 
@@ -104,3 +157,9 @@ loxilb provides three load balancing selection modes optimized for LLM traffic. 
 - **Setting up KV cache routing?** See [KV Caching](kv-caching.md) for configuration.
 - **Deploying on AWS?** See [AWS KV Cache Deployment](aws-kv-cache.md) for cloud-specific guidance.
 - **Need the full config reference?** See [Configuration Reference](configuration-reference.md) for all fields.
+
+## See Also
+
+- [API Key Management API Reference](../reference/api.md#ai-gateway-api-key-management)
+- [Tenant Rate Limits API Reference](../reference/api.md#ai-gateway-tenant-rate-limits)
+- [GPU and LLM Catalog API Reference](../reference/api.md#ai-gateway-gpu-and-llm-catalog)

@@ -57,7 +57,6 @@ This tier requires `kvExactMode: 1` and a tokenizer file staged on the loxilb ho
 
 The ZMQ PUB socket defaults to port 5557 on each vLLM instance. The wire format is msgpack-encoded `KVEventBatch`.
 
-(Source: ai_kv_router.go for tokenizer pool and LRU cache, ai_kv_subscriber.go for ZMQ subscriber and block inventory)
 
 !!! tip "When to Use Tier 1.5"
     Enable KV-exact routing (`kvExactMode: 1`) for conversational workloads where users have multi-turn conversations with the same model. The cache hit rate improves with longer conversations and more shared system prompts. For batch/one-shot queries with no conversation continuity, Tier 2 (GPU-aware scoring) may be more effective.
@@ -77,7 +76,6 @@ The scraper updates the C-side queue depth via `llb_ai_update_ep_queue_depth()` 
 
 Use `sel: 9` (LbSelGPUAware) to enable GPU-aware selection.
 
-(Source: ai_vllm_scraper.go:43-92, :175-191)
 
 ### Tier 3: Fallback — CHWBL Consistent Hash
 
@@ -100,7 +98,6 @@ How it works:
 
 3. **HTTP body parsing**: The model name is extracted from the JSON body by sockproxy.c using the jsmn JSON parser, operating at C speed in the data plane.
 
-(Source: common/common.go:858, PRD-phase2.json US-201/US-202)
 
 See [Model Load Balancing](model-load-balancing.md) for configuration examples.
 
@@ -121,14 +118,11 @@ This design allows:
 - **Testable business logic**: All enforcement logic is pure Go, testable with standard Go test tooling — no CGO required for unit tests.
 - **Consistent pattern**: Every AI Gateway feature (API keys, rate limits, LlamaFirewall, token quotas) uses the same bridge pattern, making the codebase predictable.
 
-(Source: ai_security.go CGO bridge pattern, ai_gateway_dp.go)
 
 ## Prerequisites and Configuration Pointers
 
 !!! warning "Required: FullProxy Mode"
     All AI Gateway routing features require `mode: 4` (LBModeFullProxy) and `backend_protocol: "http1"`. Other LB modes perform L4 load balancing only and cannot inspect HTTP bodies for model routing or KV cache matching.
-
-    Source: common/common.go:885
 
 | What You Want | Where to Go |
 |---------------|-------------|
@@ -138,10 +132,114 @@ This design allows:
 | Deploy on AWS EKS | [AWS KV Cache Deployment](aws-kv-cache.md) — security groups, ZMQ networking |
 | See all config fields | [Configuration Reference](configuration-reference.md) — complete field reference with source annotations |
 
+## REST API Config
+
+LLM routing modes are configured via the `sel` field in `serviceArguments` when creating an LB service rule. The `sel` field controls which load balancing algorithm is used for endpoint selection:
+
+| `sel` Value | Mode | Best For |
+|-------------|------|----------|
+| `8` | Consistent Hash with Bounded Loads (CHWBL) | KV cache locality — conversational workloads |
+| `9` | GPU-Aware | Throughput — batch/independent queries with vLLM metrics |
+| `10` | Weighted Round-Robin with Hash | Mixed workloads or transition from standard LB |
+
+### Configure GPU-Aware Routing (sel: 9)
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "sel": 9,
+      "backend_protocol": "http1"
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
+      {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
+```
+
+### Configure KV Cache-Aware Routing (sel: 8)
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "sel": 8,
+      "kvExactMode": 1,
+      "kvBlockSize": 16,
+      "backend_protocol": "http1"
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
+      {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
+```
+
+For detailed KV cache configuration fields, see [KV Caching](kv-caching.md). For GPU-aware scraper setup, see [vLLM Integration](vllm-integration.md).
+
+## Verify
+
+Confirm the routing mode is active by listing configured services:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>"
+```
+
+Check that your service rule shows the expected `sel` value in the response. For GPU-aware mode (`sel: 9`), also verify the GPU feature is enabled:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/gpu/status \
+  -H "Authorization: Bearer <token>"
+
+# Expected: {"gpu_aware_enabled": true, "active_scrapers": N}
+```
+
+## Troubleshooting
+
+**Uneven load distribution across GPUs**
+
+- Verify the `sel` value matches your intended routing mode: `GET /config/services`
+- For GPU-aware mode (`sel: 9`), confirm the vLLM scraper is connected and metrics are being collected: `GET /config/gpu/status`
+- Check that endpoint weights are balanced if using weighted modes
+
+**Model not routable (requests failing with 502)**
+
+- Confirm all backend endpoints are healthy and accepting connections
+- Check that `backend_protocol` is set to `"http1"` in the service rule
+- Verify the `model_name` field matches the model served by the backend (if using per-model routing)
+
+**KV cache hit rate is low**
+
+- Ensure `kvExactMode: 1` is set and the tokenizer file is staged on the loxilb host
+- Verify ZMQ connectivity to vLLM instances on port 5557
+- Check that `kvBlockSize` matches the block size used by the vLLM instances
+
 ## See Also
 
 - [AI Gateway Overview](overview.md) — Conceptual introduction and traffic flow diagram
 - [KV Caching](kv-caching.md) — KV-exact routing configuration
 - [vLLM Integration](vllm-integration.md) — GPU metrics scraping setup
 - [Model Load Balancing](model-load-balancing.md) — Per-model endpoint pools
+- [PD Disaggregation](pd-disaggregation.md) — Prefill/decode separation
 - [Configuration Reference](configuration-reference.md) — All AI Gateway config fields
+- [GPU and LLM Catalog API Reference](../reference/api.md#ai-gateway-gpu-and-llm-catalog)
