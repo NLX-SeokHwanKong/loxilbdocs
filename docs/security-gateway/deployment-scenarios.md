@@ -31,6 +31,20 @@ flowchart LR
 
 **Best for:** Organizations that need centralized, auditable network policy management without the complexity of content inspection or encryption.
 
+### Verify This Scenario
+
+Confirm OPA watcher is running and IP filters are active:
+
+```bash
+# Check OPA watcher status
+curl http://loxilb:11111/netlox/v1/config/opa/watcher \
+  -H "Authorization: Bearer <token>"
+
+# List active IP filter rules
+curl http://loxilb:11111/netlox/v1/config/ipfilter/all \
+  -H "Authorization: Bearer <token>"
+```
+
 ## Scenario 2: AI Security Gateway
 
 **Features active:** LlamaFirewall + Presidio + Rate Limiting (token quota)
@@ -47,14 +61,32 @@ flowchart LR
 
 **Key configuration:**
 
-- Rate limiting: `rate_limit_rps`, `burst_size`, `tokens_per_min` per API key
-- LlamaFirewall: Port 50052, `fail_closed: false` (fail-open default)
-- Presidio: Port 50051, shared memory config at `/dev/shm/loxilb_presidio_config`
+- Rate limiting: `rate_limit_rps`, `burst_size`, `daily_token_quota` per API key
+- LlamaFirewall: Port 50052, fail-open by default
+- Presidio: Port 50051, configured via `POST /config/pii/configure`
 
 !!! warning "Port allocation"
     LlamaFirewall (50052) and Presidio (50051) must run on different ports. Verify port assignments when deploying both services.
 
 **Best for:** Organizations deploying AI/LLM services that need to protect against prompt injection, enforce PII compliance (GDPR/CCPA), and control inference costs.
+
+### Verify This Scenario
+
+Confirm all AI security components are active:
+
+```bash
+# Check LlamaFirewall status
+curl http://loxilb:11111/netlox/v1/config/llamafirewall/status \
+  -H "Authorization: Bearer <token>"
+
+# Check Presidio PII detection status
+curl http://loxilb:11111/netlox/v1/config/pii/status \
+  -H "Authorization: Bearer <token>"
+
+# Verify API key rate limits
+curl http://loxilb:11111/netlox/v1/config/ai/apikey/{key_id} \
+  -H "Authorization: Bearer <token>"
+```
 
 ## Scenario 3: Encrypted Node Mesh
 
@@ -77,6 +109,18 @@ flowchart LR
 - MTU: 1400 (default, accounting for IPsec overhead)
 
 **Best for:** Organizations with regulatory compliance requirements (PCI-DSS, HIPAA) mandating encryption in transit, or multi-site deployments needing secure connectivity between data centers.
+
+### Verify This Scenario
+
+Confirm all IPsec tunnels are established:
+
+```bash
+# List all IPsec tunnels and check status
+curl http://loxilb:11111/netlox/v1/config/ipsec/tunnels/all \
+  -H "Authorization: Bearer <token>"
+```
+
+Check that each tunnel shows `"status": "established"` and traffic counters are incrementing.
 
 ## Scenario 4: Full Enterprise Security Gateway
 
@@ -107,12 +151,42 @@ flowchart TD
 
 **Key considerations:**
 
-- Enable `hwOffloadEnabled` for IPsec if QAT/DPAA2 hardware is available
+- Enable `hw_offload_enabled` for IPsec if QAT/DPAA2 hardware is available
 - Set appropriate `fail_open` / `fail_closed` per component based on security policy
 - Monitor port allocation to prevent conflicts between Presidio and LlamaFirewall
 - mTLS requires `mode=4` (FullProxy) — ensure load balancer rules are configured correctly
 
 **Best for:** Organizations in highly regulated industries that need defense-in-depth across all security layers, with full audit trails and compliance documentation.
+
+### Verify This Scenario
+
+Confirm all security components are operational:
+
+```bash
+# Check OPA watcher
+curl http://loxilb:11111/netlox/v1/config/opa/watcher \
+  -H "Authorization: Bearer <token>"
+
+# Check IPsec tunnels
+curl http://loxilb:11111/netlox/v1/config/ipsec/tunnels/all \
+  -H "Authorization: Bearer <token>"
+
+# Check LlamaFirewall
+curl http://loxilb:11111/netlox/v1/config/llamafirewall/status \
+  -H "Authorization: Bearer <token>"
+
+# Check Presidio PII
+curl http://loxilb:11111/netlox/v1/config/pii/status \
+  -H "Authorization: Bearer <token>"
+
+# Check security rate config
+curl http://loxilb:11111/netlox/v1/config/securityrate/all \
+  -H "Authorization: Bearer <token>"
+
+# Check IP filter rules
+curl http://loxilb:11111/netlox/v1/config/ipfilter/all \
+  -H "Authorization: Bearer <token>"
+```
 
 ## Choosing a Deployment Pattern
 
@@ -130,3 +204,4 @@ These scenarios are not mutually exclusive — you can start with Scenario 1 and
 - [Security Gateway Overview](overview.md) — Feature map, fail-mode table, port allocation
 - [Secure Dataplane Overview](secure-dataplane.md) — How IPsec, mTLS, and eBPF layers combine
 - [Configuration Reference](configuration-reference.md) — Quick-reference for all config fields
+- [Full API Reference](../reference/api.md) — Complete REST API documentation
