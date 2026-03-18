@@ -24,8 +24,6 @@ flowchart LR
     Client -->|"Request to VIP"| LB["loxilb\n(MAC rewrite)"]
     LB -->|"Forward\n(dst MAC = backend)"| Backend
     Backend -->|"Response direct to Client\n(bypasses LB)"| Client
-
-    LB -.- L1["Source: common/common.go:712\nLBModeDSR = 3"]
 ```
 
 ### L3-DSR (Cross Subnet)
@@ -40,8 +38,6 @@ flowchart LR
 !!! warning "Port Constraint"
     In DSR mode, the endpoint target port **MUST** equal the service port. DSR does not rewrite packets — the backend receives traffic on the original service port. If ports differ, loxilb returns: `malformed-service dsr-port error`.
 
-    Source: `pkg/loxinet/rules.go` — validates `k.EpPort != serv.ServPort` in DSR mode.
-
 ## Prerequisites
 
 - **L2-DSR**: Backends must be in the same L2 subnet as the loxilb node
@@ -49,12 +45,34 @@ flowchart LR
 - **Both modes**: ARP suppression for the VIP on backend nodes (prevent backends from answering ARP for the VIP)
 - **L3-DSR**: IPinIP tunnel interface configured on backends for decapsulation
 
-## Configuration
+## REST API Configuration
+
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb:11111/netlox/v1/config/loadbalancer \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "20.20.20.1",
+          "port": 2020,
+          "protocol": "tcp",
+          "mode": 3
+        },
+        "endpoints": [
+          {"endpointIP": "31.31.31.1", "targetPort": 2020, "weight": 1},
+          {"endpointIP": "32.32.32.1", "targetPort": 2020, "weight": 1}
+        ]
+      }'
+
+    # Response (200):
+    # {"result": "Success"}
+    ```
 
 === "loxicmd"
 
     ```bash
-    # Source: cmd/loxicmd-enterprise/cmd/create/create_loadbalancer.go:208
     # L2-DSR (same subnet, MAC rewrite)
     # NOTE: endpoint port MUST equal service port
     loxicmd create lb 20.20.20.1 --tcp=2020:2020 \
@@ -65,25 +83,15 @@ flowchart LR
       --endpoints=31.31.31.1:1,32.32.32.1:1 --mode=dsr --select=hash
     ```
 
-=== "REST API"
+### Option Details
 
-    ```json
-    POST /netlox/v1/config/loadbalancer
-    {
-      "serviceArguments": {
-        "externalIP": "20.20.20.1",
-        "port": 2020,
-        "protocol": "tcp",
-        "mode": 3
-      },
-      "endpoints": [
-        {"endpointIP": "31.31.31.1", "targetPort": 2020, "weight": 1},
-        {"endpointIP": "32.32.32.1", "targetPort": 2020, "weight": 1}
-      ]
-    }
-    ```
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `mode` | int | `0` (default NAT), `3` (DSR), `4` (fullproxy), `5` (fullnat) | `0` | LB operating mode — use `3` for DSR |
+| `select` | string | `rr`, `hash`, `persist`, `n2` | `rr` | Load balancing algorithm |
 
-    <!-- Source: common/common.go:712 — LBModeDSR = 3 -->
+!!! note "Common Fields"
+    For common fields (`externalIP`, `port`, `protocol`, `endpoints`), see [Network Gateway Overview](overview.md).
 
 ## Backend Configuration
 
@@ -108,7 +116,14 @@ ip link set tunl0 up
 ip addr add 20.20.20.1/32 dev tunl0
 ```
 
-## Verification
+## Verify
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/loadbalancer/all \
+  -H "Authorization: Bearer <token>"
+
+# Response (200): array of LB rule objects including your DSR rule
+```
 
 ```bash
 # Confirm DSR rule is active
@@ -121,6 +136,17 @@ tcpdump -i eth0 src host 20.20.20.1
 # From client, verify service is reachable
 curl http://20.20.20.1:2020/
 ```
+
+## Troubleshoot
+
+**Port mismatch error**
+:   DSR requires `targetPort` to equal the service `port`. If they differ, the POST returns `malformed-service dsr-port error`. Ensure all endpoint `targetPort` values match the service port exactly.
+
+**Backends not responding**
+:   DSR backends must have the VIP configured on their loopback interface (`ip addr add <VIP>/32 dev lo`). Without this, the backend drops packets destined for the VIP. Also verify ARP suppression is active (`arp_ignore=1`, `arp_announce=2`).
+
+**L3-DSR tunnel not established**
+:   For cross-subnet DSR, backends need an IPinIP tunnel interface with the VIP assigned. Verify with `ip tunnel show` and `ip addr show dev tunl0`. The tunnel `local` address must match the backend's own IP.
 
 ## DSR with SCTP
 
@@ -147,6 +173,8 @@ See [SCTP Multi-homing](sctp-multihoming.md) for full SCTP documentation includi
 
 ## See Also
 
+- [API Reference — Load Balancer](../reference/api.md#community-api-baseline)
+- [Community API Reference (SwaggerHub)](https://app.swaggerhub.com/apis-docs/ADMIN_111/loxilb/1.0.0)
 - [Egress LB](egress-lb.md) — Outbound traffic management
 - [SCTP Multi-homing](sctp-multihoming.md) — SCTP DSR for telco workloads
 - [Network Gateway Overview](overview.md) — All Network Gateway features

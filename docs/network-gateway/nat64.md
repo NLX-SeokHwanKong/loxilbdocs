@@ -18,8 +18,6 @@ flowchart LR
     B -->|"IPv4 request\nto 31.31.31.1:8080"| C["IPv4 Backend\n31.31.31.1"]
     C -->|"IPv4 response"| B
     B -->|"IPv6 response"| A
-
-    B -.- B1["bpf_skb_change_proto\n(protocol translation)"]
 ```
 
 !!! note "Kernel Requirement"
@@ -30,7 +28,6 @@ flowchart LR
 IPv6 must be enabled on the loxilb host:
 
 ```bash
-# Source: docs/standalone.md:19
 sysctl net.ipv6.conf.all.disable_ipv6=0
 sysctl net.ipv6.conf.default.disable_ipv6=0
 ```
@@ -39,39 +36,62 @@ sysctl net.ipv6.conf.default.disable_ipv6=0
 - IPv6 connectivity between clients and the loxilb node
 - IPv4 connectivity between loxilb and backend servers
 
-## Configuration
+## REST API Configuration
+
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb:11111/netlox/v1/config/loadbalancer \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "2001::1",
+          "port": 2020,
+          "protocol": "tcp"
+        },
+        "endpoints": [
+          {"endpointIP": "31.31.31.1", "targetPort": 8080, "weight": 1},
+          {"endpointIP": "32.32.32.1", "targetPort": 8080, "weight": 1},
+          {"endpointIP": "33.33.33.1", "targetPort": 8080, "weight": 1}
+        ]
+      }'
+
+    # Response (200):
+    # {"result": "Success"}
+    ```
 
 === "loxicmd"
 
     ```bash
-    # Source: docs/cmd.md:82 — IPv6 VIP with IPv4 endpoints = NAT64
     loxicmd create lb 2001::1 --tcp=2020:8080 \
       --endpoints=31.31.31.1:1,32.32.32.1:1,33.33.33.1:1
     ```
 
     The key pattern is straightforward: specify an **IPv6 address as the VIP** and **IPv4 addresses as endpoints**. loxilb automatically detects the address family mismatch and enables NAT64 translation.
 
-=== "REST API"
+### Option Details
 
-    ```json
-    POST /netlox/v1/config/loadbalancer
-    {
-      "serviceArguments": {
-        "externalIP": "2001::1",
-        "port": 2020,
-        "protocol": "tcp"
-      },
-      "endpoints": [
-        {"endpointIP": "31.31.31.1", "targetPort": 8080, "weight": 1},
-        {"endpointIP": "32.32.32.1", "targetPort": 8080, "weight": 1},
-        {"endpointIP": "33.33.33.1", "targetPort": 8080, "weight": 1}
-      ]
-    }
-    ```
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `externalIP` | string | IPv6 address | (required) | **Must be IPv6** to trigger NAT64 translation |
+| `port` | int | 0-65535 | (required) | Service port number |
+| `protocol` | string | `tcp`, `udp`, `sctp` | (required) | Transport protocol |
 
-    <!-- Source: common/common.go:201 — Ipv6Addrs []string -->
+!!! note "NAT64 Activation"
+    NAT64 is activated automatically when `externalIP` is an IPv6 address and endpoint IPs are IPv4. No explicit NAT64 flag exists.
 
-## Verification
+!!! note "Common Fields"
+    For endpoint fields and other common options, see [Network Gateway Overview](overview.md).
+
+## Verify
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/loadbalancer/all \
+  -H "Authorization: Bearer <token>"
+
+# Response (200): array of LB rule objects including your NAT64 rule
+```
 
 ```bash
 # Confirm IPv6 VIP is listed in LB rules
@@ -85,6 +105,17 @@ tcpdump -i eth0 dst port 8080
 ```
 
 The backend server will see traffic arriving from an IPv4 address (loxilb's IPv4 interface), not from the original IPv6 client address.
+
+## Troubleshoot
+
+**IPv6 not enabled on host**
+:   Check `sysctl net.ipv6.conf.all.disable_ipv6` — if it returns `1`, IPv6 is disabled. Set to `0` with `sysctl -w net.ipv6.conf.all.disable_ipv6=0` and also for the default interface.
+
+**Kernel version too old for NAT64**
+:   NAT64 requires Linux kernel 4.18+ for the `bpf_skb_change_proto` eBPF helper. Check with `uname -r`. Upgrade the kernel if running an older version.
+
+**DNS64 confusion**
+:   loxilb NAT64 operates at Layer 4 (transport) — it translates IPv6 packets to IPv4 at the load balancer. DNS64 is a separate DNS-level mechanism that synthesizes AAAA records. loxilb does not provide DNS64; if your IPv6 clients need DNS resolution of IPv4-only services, configure DNS64 separately.
 
 ## Dual-Stack Considerations
 
@@ -103,10 +134,12 @@ loxicmd create lb 2001::1 --tcp=2020:8080 \
 Both rules load balance to the same IPv4 backends, but the IPv6 rule includes automatic protocol translation.
 
 !!! note "NAT66 Support"
-    loxilb also supports NAT66 (IPv6-to-IPv6) load balancing using IPv6 VIPs with IPv6 endpoints. NAT66/NAT64 support is listed as a shipped feature in the loxilb roadmap (Source: `docs/roadmap.md:34`).
+    loxilb also supports NAT66 (IPv6-to-IPv6) load balancing using IPv6 VIPs with IPv6 endpoints. NAT66/NAT64 support is a shipped feature in loxilb.
 
 ## See Also
 
+- [API Reference — Load Balancer](../reference/api.md#community-api-baseline)
+- [Community API Reference (SwaggerHub)](https://app.swaggerhub.com/apis-docs/ADMIN_111/loxilb/1.0.0)
 - [DSR](dsr.md) — Direct Server Return for high-throughput traffic
 - [HTTPS Proxy](https-proxy.md) — TLS termination and proxy modes
 - [Network Gateway Overview](overview.md) — All Network Gateway features
