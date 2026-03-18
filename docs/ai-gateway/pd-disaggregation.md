@@ -47,37 +47,37 @@ This combines the benefits of PD disaggregation with KV cache locality for decod
 
 ## Configuration
 
-```yaml
-# PD Disaggregation — Full Config
-# Source: common/common.go:884-895
-serviceArguments:
-  vip: "192.168.1.100"
-  port: 443
-  protocol: "tcp"
-  mode: 4                       # LBModeFullProxy required
-  backend_protocol: "http1"     # http2 not supported for P/D
-  pd_disagg_mode: true          # enable P/D disaggregation (Source: common/common.go:886)
-  pd_cache_aware_mode: true     # session + trie + min-load routing (Source: common/common.go:889)
-  pd_session_ttl_sec: 300       # stickiness TTL in seconds (Source: common/common.go:891)
-  pd_cache_threshold: 20        # min cache match % to stick (Source: common/common.go:893)
-  pd_balance_abs_threshold: 3   # max load imbalance tolerance (Source: common/common.go:895)
-endpoints:
-  # Prefill endpoints — compute-optimized GPUs
-  - endpointIP: "10.0.1.10"
-    targetPort: 8080
-    ep_role: 1                  # prefill (Source: common/common.go:941)
-    nixl_port: 5001             # NIXL KV transfer port (Source: common/common.go:943)
-  - endpointIP: "10.0.1.11"
-    targetPort: 8080
-    ep_role: 1
-    nixl_port: 5001
-  # Decode endpoints — memory-optimized GPUs
-  - endpointIP: "10.0.2.10"
-    targetPort: 8081
-    ep_role: 2                  # decode (Source: common/common.go:941)
-  - endpointIP: "10.0.2.11"
-    targetPort: 8081
-    ep_role: 2
+### REST API Config
+
+Configure PD disaggregation via `POST /config/services` with PD-specific `serviceArguments` and endpoint roles:
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "backend_protocol": "http1",
+      "pd_disagg_mode": true,
+      "pd_cache_aware_mode": true,
+      "pd_session_ttl_sec": 300,
+      "pd_cache_threshold": 20,
+      "pd_balance_abs_threshold": 3
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.1.10", "targetPort": 8080, "weight": 1, "ep_role": 1, "nixl_port": 5001},
+      {"endpointIP": "10.0.1.11", "targetPort": 8080, "weight": 1, "ep_role": 1, "nixl_port": 5001},
+      {"endpointIP": "10.0.2.10", "targetPort": 8081, "weight": 1, "ep_role": 2},
+      {"endpointIP": "10.0.2.11", "targetPort": 8081, "weight": 1, "ep_role": 2}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
 ```
 
 ## Endpoint Roles
@@ -85,7 +85,6 @@ endpoints:
 !!! warning "Required: Set ep_role on Every Endpoint"
     PD disaggregation enabled (`pd_disagg_mode: true`) but endpoints with `ep_role: 0` (default/normal) will **NOT** participate in P/D routing. You MUST set `ep_role: 1` for prefill and `ep_role: 2` for decode endpoints explicitly. Forgetting this causes P/D routing to fall back to basic first-healthy selection with no disaggregation benefit.
 
-    Source: Pitfall 5 from research — common/common.go:941
 
 | ep_role | Value | Description | GPU Profile |
 |---------|-------|-------------|-------------|
@@ -95,15 +94,15 @@ endpoints:
 
 ## Configuration Reference
 
-| Field | Type | Default | Description | Source |
-|-------|------|---------|-------------|--------|
-| `pd_disagg_mode` | bool | `false` | Enable PD disaggregation | common/common.go:886 |
-| `pd_cache_aware_mode` | bool | `false` | Enable session + trie + min-load for decode selection | common/common.go:889 |
-| `pd_session_ttl_sec` | int | `300` | Session stickiness TTL for decode endpoints (seconds) | common/common.go:891 |
-| `pd_cache_threshold` | int | `20` | Minimum cache match percentage to stick to a decode endpoint | common/common.go:893 |
-| `pd_balance_abs_threshold` | int | `3` | Maximum load imbalance tolerance before rebalancing | common/common.go:895 |
-| `ep_role` | int | `0` | Endpoint role: 0=normal, 1=prefill, 2=decode | common/common.go:941 |
-| `nixl_port` | int | - | NIXL sideband port for KV cache transfer (prefill endpoints only) | common/common.go:943 |
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `pd_disagg_mode` | bool | `true`, `false` | `false` | Enable PD disaggregation |
+| `pd_cache_aware_mode` | bool | `true`, `false` | `false` | Enable session stickiness + trie matching + min-load for decode selection |
+| `pd_session_ttl_sec` | int | > 0 | `300` | Session stickiness TTL for decode endpoints (seconds) |
+| `pd_cache_threshold` | int | 0–100 | `20` | Minimum cache match percentage to stick to a decode endpoint |
+| `pd_balance_abs_threshold` | int | >= 0 | `3` | Maximum load imbalance tolerance before rebalancing |
+| `ep_role` | int | `0`, `1`, `2` | `0` | Endpoint role: 0=normal, 1=prefill, 2=decode |
+| `nixl_port` | int | 1–65535 | - | NIXL sideband port for KV cache transfer (prefill endpoints only) |
 
 ## Monitoring
 
@@ -118,10 +117,39 @@ These metrics help identify:
 - Imbalanced GPU pools (one endpoint consistently slower)
 - NIXL transfer overhead between prefill and decode nodes
 
-(Source: ai_gateway_dp.go:511-575)
+## Verify
+
+Confirm PD disaggregation is configured by listing your service rules:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>"
+```
+
+Check that the response includes your service rule with `pd_disagg_mode: true` and endpoints with the correct `ep_role` values (1 for prefill, 2 for decode).
+
+## Troubleshooting
+
+**Prefill endpoints not sticky (decode endpoints constantly changing)**
+
+- Verify `pd_cache_aware_mode: true` is set in the service rule
+- Check `pd_session_ttl_sec` is high enough for your conversation patterns (default: 300s)
+- Ensure `pd_cache_threshold` is not too high — lower values (e.g., 10-20) allow stickiness with partial cache matches
+
+**Decode load imbalanced (some GPUs overloaded)**
+
+- Check `pd_balance_abs_threshold` — lower values trigger rebalancing sooner
+- Verify all decode endpoints (`ep_role: 2`) are healthy and accepting connections
+- If one decode GPU is consistently slower, investigate GPU memory bandwidth or thermal throttling
+
+**P/D routing falling back to basic selection**
+
+- Confirm all endpoints have explicit `ep_role` values set (1 or 2) — endpoints with `ep_role: 0` do not participate in P/D routing
+- Verify `pd_disagg_mode: true` is set in `serviceArguments`
 
 ## See Also
 
 - [KV Caching](kv-caching.md) — KV-exact routing for non-disaggregated deployments
 - [vLLM Integration](vllm-integration.md) — GPU metrics scraping
 - [Configuration Reference](configuration-reference.md) — All AI Gateway config fields
+- [GPU and LLM Catalog API Reference](../reference/api.md#ai-gateway-gpu-and-llm-catalog)

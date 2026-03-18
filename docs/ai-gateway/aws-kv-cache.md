@@ -105,9 +105,87 @@ loxilb runs as an external load balancer on EKS. Two common patterns:
 
 See [EKS External Mode](../eks-external.md) for detailed setup instructions.
 
+## REST API Config
+
+The KV cache routing configuration on AWS is identical to standard deployments. Use `POST /config/services` to create the service rule — see [KV Caching — REST API Config](kv-caching.md#rest-api-config) for the complete curl example with all KV fields.
+
+The only AWS-specific consideration is ensuring your VIP and endpoint IPs are routable within the VPC:
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "10.0.0.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "sel": 8,
+      "kvExactMode": 1,
+      "kvBlockSize": 16,
+      "kvHashAlgo": "sha256_cbor",
+      "kvZmqPort": 5557,
+      "kvWarmupSec": 30
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.1.10", "targetPort": 8080, "weight": 1},
+      {"endpointIP": "10.0.1.11", "targetPort": 8080, "weight": 1},
+      {"endpointIP": "10.0.1.12", "targetPort": 8080, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
+```
+
+## Verify
+
+Confirm ZMQ connectivity between loxilb and vLLM instances:
+
+```bash
+# Test ZMQ port from loxilb node to each vLLM pod
+nc -zv <vllm-pod-ip> 5557
+```
+
+Expected output: `Connection to <vllm-pod-ip> 5557 port [tcp/*] succeeded!`
+
+Also verify the service rule is configured:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>"
+```
+
+Check for the log line confirming the KV block inventory is active:
+
+```
+kv-router: block inventory populated, N endpoints active
+```
+
+## Troubleshooting
+
+**ZMQ connection refused**
+
+- Verify the security group allows inbound TCP 5557 from the loxilb security group to the GPU node group
+- Confirm vLLM is configured to publish KV block events on ZMQ and the port matches `kvZmqPort`
+- Check pod networking: ensure vLLM pod IPs are routable from the loxilb node (AWS VPC CNI)
+
+**Cache not populating (block inventory empty)**
+
+- Check loxilb logs for ZMQ subscriber connection errors
+- Verify vLLM startup flags include KV event publishing
+- Ensure `kvWarmupSec` has elapsed since startup (default: 30 seconds)
+
+**Cross-AZ latency higher than expected**
+
+- ZMQ block inventory updates are background traffic — cross-AZ latency (~1ms) does not affect request-path latency
+- For latency-sensitive deployments, consider AZ-affinity routing with cross-AZ fallback
+
 ## See Also
 
 - [KV Caching](kv-caching.md) — Core KV cache routing configuration and concepts
 - [EKS External Mode](../eks-external.md) — Base EKS deployment pattern for loxilb
 - [Multi-AZ HA on AWS](../aws-multi-az.md) — High availability deployment on AWS
 - [Configuration Reference](configuration-reference.md) — All AI Gateway config fields
+- [GPU and LLM Catalog API Reference](../reference/api.md#ai-gateway-gpu-and-llm-catalog)
