@@ -8,16 +8,12 @@
 
 SCTP (Stream Control Transmission Protocol) is essential for telco and 5G networks, particularly for control plane interfaces such as N2/NGAP between gNB (base station) and AMF (Access and Mobility Management Function). loxilb provides SCTP load balancing with multi-homing support for high availability.
 
-SCTP multi-homing allows an SCTP association to span multiple IP addresses for redundancy. If the primary path fails, traffic automatically switches to a secondary address without disrupting the association. loxilb's `--secips` flag configures secondary service IPs that participate in the SCTP association, enabling seamless failover at the gateway layer.
+SCTP multi-homing allows an SCTP association to span multiple IP addresses for redundancy. If the primary path fails, traffic automatically switches to a secondary address without disrupting the association. The `secondaryIPs` field configures secondary service IPs that participate in the SCTP association, enabling seamless failover at the gateway layer.
 
-Source: `common/common.go:967-968` — `SecIPs []LbSecIPArg`
-
-The `LbSelN2` selector is specifically designed for 5G N2 interface SCTP load balancing, providing optimized session affinity for NGAP signaling.
+The `n2` load balancing selector is specifically designed for 5G N2 interface SCTP load balancing, providing optimized session affinity for NGAP signaling.
 
 !!! warning "SCTP Only"
-    The `--secips` flag is restricted to SCTP protocol only. If used with `--tcp` or `--udp`, loxilb prints: `Secondary IPs allowed in SCTP only`.
-
-    Source: `create_loadbalancer.go:255`
+    The `secondaryIPs` field is restricted to SCTP protocol only. If used with TCP or UDP, loxilb returns: `Secondary IPs allowed in SCTP only`.
 
 ## Architecture
 
@@ -31,8 +27,6 @@ flowchart LR
     B -->|"SCTP"| C["AMF 1\n10.212.0.1"]
     B -->|"SCTP"| D["AMF 2\n10.212.0.2"]
     B -->|"SCTP"| E["AMF 3\n10.212.0.3"]
-
-    B -.- B1["Source: common/common.go:951-954\nLbSecIPArg"]
 ```
 
 The gNB establishes an SCTP association with the loxilb VIP using both the primary IP and secondary IPs. If the primary path becomes unreachable, SCTP automatically fails over to a secondary IP. loxilb load balances the SCTP traffic across the AMF pool.
@@ -48,12 +42,40 @@ The gNB establishes an SCTP association with the loxilb VIP using both the prima
 - For 5G deployments: N2 interface connectivity between gNB and loxilb
 - Multiple IP addresses assigned to the loxilb node interface for multi-homing
 
-## Configuration
+## REST API Configuration
+
+### Basic SCTP Multi-homing
+
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb:11111/netlox/v1/config/loadbalancer \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "192.168.0.200",
+          "port": 37412,
+          "protocol": "sctp",
+          "secondaryIPs": [
+            {"secondaryIP": "192.168.0.201"},
+            {"secondaryIP": "192.168.0.202"}
+          ]
+        },
+        "endpoints": [
+          {"endpointIP": "10.212.0.1", "targetPort": 38412, "weight": 1},
+          {"endpointIP": "10.212.0.2", "targetPort": 38412, "weight": 1},
+          {"endpointIP": "10.212.0.3", "targetPort": 38412, "weight": 1}
+        ]
+      }'
+
+    # Response (200):
+    # {"result": "Success"}
+    ```
 
 === "loxicmd"
 
     ```bash
-    # Source: create_loadbalancer.go:394,209
     # SCTP LB with multi-homing (two secondary IPs)
     loxicmd create lb 192.168.0.200 \
       --sctp=37412:38412 \
@@ -66,63 +88,134 @@ The gNB establishes an SCTP association with the loxilb VIP using both the prima
     - `--sctp=37412:38412` — SCTP service port 37412, backend target port 38412
     - `--endpoints` — AMF backend pool with equal weights
 
-=== "REST API"
-
-    ```json
-    POST /netlox/v1/config/loadbalancer
-    {
-      "serviceArguments": {
-        "externalIP": "192.168.0.200",
-        "port": 37412,
-        "protocol": "sctp",
-        "secondaryIPs": [
-          {"secondaryIP": "192.168.0.201"},
-          {"secondaryIP": "192.168.0.202"}
-        ]
-      },
-      "endpoints": [
-        {"endpointIP": "10.212.0.1", "targetPort": 38412, "weight": 1},
-        {"endpointIP": "10.212.0.2", "targetPort": 38412, "weight": 1},
-        {"endpointIP": "10.212.0.3", "targetPort": 38412, "weight": 1}
-      ]
-    }
-    ```
-
-    <!-- Source: common/common.go:951-954 — LbSecIPArg -->
-
-## SCTP with DSR Mode
+### SCTP with DSR Mode
 
 For high-throughput SCTP workloads, DSR mode eliminates the load balancer from the return path:
 
-```bash
-# SCTP DSR — endpoint port must equal service port
-loxicmd create lb 192.168.0.200 \
-  --sctp=38412:38412 --mode=dsr \
-  --endpoints=10.212.0.1:1,10.212.0.2:1
-```
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb:11111/netlox/v1/config/loadbalancer \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "192.168.0.200",
+          "port": 38412,
+          "protocol": "sctp",
+          "mode": 3,
+          "secondaryIPs": [
+            {"secondaryIP": "192.168.0.201"},
+            {"secondaryIP": "192.168.0.202"}
+          ]
+        },
+        "endpoints": [
+          {"endpointIP": "10.212.0.1", "targetPort": 38412, "weight": 1},
+          {"endpointIP": "10.212.0.2", "targetPort": 38412, "weight": 1}
+        ]
+      }'
+
+    # Response (200):
+    # {"result": "Success"}
+    ```
+
+=== "loxicmd"
+
+    ```bash
+    # SCTP DSR — endpoint port must equal service port
+    loxicmd create lb 192.168.0.200 \
+      --sctp=38412:38412 --mode=dsr \
+      --endpoints=10.212.0.1:1,10.212.0.2:1
+    ```
 
 !!! note "DSR Port Constraint"
     When using DSR with SCTP, the endpoint target port must equal the service port. See [DSR](dsr.md) for details on the port constraint and backend configuration.
 
-## SCTP with FullNAT Mode
+### SCTP with FullNAT Mode
 
 For 5G AMF deployments where full address translation is needed:
 
-```bash
-# Source: common/common.go — fullnat mode for 5G AMF
-loxicmd create lb 88.88.88.1 \
-  --sctp=38412:38412 --mode=fullnat \
-  --endpoints=192.168.70.3:1
-```
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb:11111/netlox/v1/config/loadbalancer \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "88.88.88.1",
+          "port": 38412,
+          "protocol": "sctp",
+          "mode": 5
+        },
+        "endpoints": [
+          {"endpointIP": "192.168.70.3", "targetPort": 38412, "weight": 1}
+        ]
+      }'
+
+    # Response (200):
+    # {"result": "Success"}
+    ```
+
+=== "loxicmd"
+
+    ```bash
+    loxicmd create lb 88.88.88.1 \
+      --sctp=38412:38412 --mode=fullnat \
+      --endpoints=192.168.70.3:1
+    ```
 
 FullNAT mode rewrites both source and destination addresses, allowing loxilb to operate between networks that cannot route directly to each other.
+
+### Option Details
+
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `protocol` | string | `sctp` | (required) | Must be `sctp` for multi-homing |
+| `secondaryIPs` | array | `[{"secondaryIP": "<ip>"}]` | (optional) | Additional VIPs for SCTP multi-homing associations |
+| `mode` | int | `0` (default), `3` (DSR), `5` (fullnat) | `0` | Operating mode — combine with SCTP for DSR or FullNAT variants |
+
+!!! note "`secondaryIPs` requires SCTP"
+    `secondaryIPs` is only supported with `protocol: sctp`. Using it with TCP or UDP will be rejected.
+
+!!! note "Common Fields"
+    For common fields (`externalIP`, `port`, `endpoints`), see [Network Gateway Overview](overview.md).
+
+## Verify
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/loadbalancer/all \
+  -H "Authorization: Bearer <token>"
+
+# Response (200): array of LB rule objects — confirm SCTP rule exists with secondaryIPs
+```
+
+```bash
+# Verify multi-homing IPs are listed in the rule
+loxicmd get lb
+
+# Check SCTP association establishment
+ss -s | grep sctp
+```
+
+For DSR-specific verification, see the [DSR Verify section](dsr.md#verify). For FullNAT-specific verification, verify the `mode` value in the GET response confirms `5` (fullnat).
+
+## Troubleshoot
+
+**`secondaryIPs` rejected with non-SCTP protocol**
+:   The `secondaryIPs` field only works with `protocol: sctp`. If used with TCP or UDP, the POST returns an error. Ensure `protocol` is set to `sctp` in the request body.
+
+**SCTP kernel module not loaded**
+:   Run `lsmod | grep sctp` — if empty, load the module with `modprobe sctp`. The SCTP kernel module is required on both the loxilb node and backend servers.
+
+**Multi-homing failover not working**
+:   Verify all secondary IPs are reachable from the client (gNB). Check that SCTP heartbeat is enabled on the client side. Use `ss -s` to confirm the SCTP association is established with multiple addresses.
 
 ## Monitoring
 
 SCTP-specific metrics are available when Prometheus is enabled (`--prometheus` flag):
 
 - `active_flow_count_sctp` — Active SCTP flows through the load balancer
-- `SCTPEvents` in conntrack statistics — SCTP association events (Source: `common/common.go:1392`)
 
 See [Monitoring Setup](../operations/monitoring.md) for Prometheus configuration and scrape setup.
 
@@ -134,9 +227,11 @@ See [Monitoring Setup](../operations/monitoring.md) for Prometheus configuration
 | N4 (PFCP) | UDP | 8805 | SMF/UPF |
 | Xn | SCTP | 38422 | Neighboring gNB |
 
-For N2 interface load balancing, the `LbSelN2` selector provides optimized session affinity that maintains NGAP signaling context across SCTP associations.
+For N2 interface load balancing, the `n2` selector provides optimized session affinity that maintains NGAP signaling context across SCTP associations.
 
 ## See Also
 
+- [API Reference — Load Balancer](../reference/api.md#community-api-baseline)
+- [Community API Reference (SwaggerHub)](https://app.swaggerhub.com/apis-docs/ADMIN_111/loxilb/1.0.0)
 - [DSR](dsr.md) — Direct Server Return mode details and port constraint
 - [Network Gateway Overview](overview.md) — All Network Gateway features
