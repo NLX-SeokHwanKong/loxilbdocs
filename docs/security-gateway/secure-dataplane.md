@@ -24,8 +24,6 @@ The three layers operate at different points in the network stack:
 | Encryption | AES-128/256, 3DES | TLS 1.2+ (OpenSSL) | N/A (filtering, not encryption) |
 | Use Case | Site-to-site VPN, DC mesh | HTTPS FullProxy, zero-trust | DDoS mitigation, access control |
 | Performance Impact | Moderate (crypto offload available) | Higher (TLS handshake per connection) | Minimal (kernel fast path) |
-| loxilb Implementation | strongSwan integration | sockproxy C layer | TC hook programs |
-| Source | `ipsec.go` | `common_mtls.go` | `dpebpf_linux.go` |
 
 ## When to Use Each Layer
 
@@ -47,7 +45,7 @@ Use IPsec when you need transparent encryption between loxilb nodes or to extern
 Use mTLS when you need mutual authentication at the service level with certificate-based identity. Both the client and the server prove their identity during the TLS handshake.
 
 !!! warning "FullProxy mode required"
-    mTLS only works with `security=1` (HTTPS) or `security=2` (E2E HTTPS) and `mode=4` (FullProxy). It has **no effect** in DSR or NAT mode. Source: swagger.yml:6360.
+    mTLS only works with `security=1` (HTTPS) or `security=2` (E2E HTTPS) and `mode=4` (FullProxy). It has **no effect** in DSR or NAT mode.
 
 **Best for:**
 
@@ -86,32 +84,37 @@ flowchart TD
     F -->|Yes| G[mTLS Terminate]
     F -->|No| H[Forward to Backend]
     G --> H
-
-    B -.- B1["dpebpf_linux.go"]
-    D -.- D1["ipsec.go"]
-    G -.- G1["common_mtls.go\nsockproxy C layer"]
 ```
 
 Each layer is independently configurable. You can deploy IPsec tunnels without mTLS, or eBPF filtering without IPsec. The layers compose — traffic can pass through all three in sequence for maximum security posture.
+
+## REST API Configuration
+
+The secure dataplane combines three protection layers. Each is configured via its own REST API endpoint:
+
+- **IPsec:** `POST /config/ipsec/tunnels` — [IPsec Configuration](ipsec.md)
+- **SYN Flood Protection:** `POST /config/securityrate` — [SYN Flood Protection](syn-flood.md)
+- **IP Filtering:** `POST /config/ipfilter` — [IP Filtering](ip-filtering.md)
 
 ## Hardware Acceleration
 
 ### IPsec Crypto Offload
 
-IPsec supports hardware acceleration for encryption operations via the `hwOffloadEnabled` configuration flag. When enabled, cryptographic operations are offloaded to supported hardware accelerators (QAT, DPAA2), significantly reducing CPU overhead for high-throughput encrypted tunnels.
-
-```
-# Source: ipsec.go — IPsecConfig
-hwOffloadEnabled: true    # Enable QAT/DPAA2 crypto offload
-antiReplayEnabled: true   # Anti-replay protection (recommended)
-mtu: 1400                 # Default MTU for IPsec tunnels
-```
+IPsec supports hardware acceleration for encryption operations via the `hw_offload_enabled` configuration flag. When enabled, cryptographic operations are offloaded to supported hardware accelerators (QAT, DPAA2), significantly reducing CPU overhead for high-throughput encrypted tunnels.
 
 **MTU considerations:** IPsec adds overhead to each packet (ESP header, IV, padding, authentication). The default MTU of 1400 bytes accounts for this overhead. Adjust if your network path has a non-standard MTU.
 
 ### Anti-Replay Protection
 
-The `antiReplayEnabled` flag enables IPsec anti-replay protection, which detects and drops replayed packets using a sliding window of sequence numbers. This is recommended for all production deployments to prevent replay attacks.
+The `anti_replay_enabled` flag enables IPsec anti-replay protection, which detects and drops replayed packets using a sliding window of sequence numbers. This is recommended for all production deployments to prevent replay attacks.
+
+## Verify
+
+To verify each layer of the secure dataplane:
+
+- **IPsec:** See [IPsec Verify](ipsec.md#verify)
+- **SYN Flood:** See [SYN Flood Verify](syn-flood.md#verify)
+- **IP Filtering:** See [IP Filtering Verify](ip-filtering.md#verify)
 
 ## Deep Dive Pages
 
@@ -123,6 +126,8 @@ For detailed configuration of each security layer:
 
 ## See Also
 
+- [IPsec API Reference](../reference/api.md#ipsec)
+- [Security Controls API Reference](../reference/api.md#security-controls)
 - [Security Gateway Overview](overview.md) — Full Security Gateway feature map with fail-mode and port allocation tables
 - [Deployment Scenarios](deployment-scenarios.md) — How to combine security layers for different compliance requirements
 - [Configuration Reference](configuration-reference.md) — Quick-reference table for all security configuration fields

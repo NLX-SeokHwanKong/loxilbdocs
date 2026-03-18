@@ -14,7 +14,7 @@ The Security Gateway organizes its capabilities into three pillars:
 - **Data Protection** — Presidio PII detection/redaction and LlamaFirewall AI content safety. These features inspect traffic content for sensitive data and malicious AI prompts before it reaches backends.
 - **Secure Transport** — IPsec tunnels, mTLS mutual authentication, and eBPF kernel-level protections. These features encrypt and authenticate traffic between nodes and services.
 
-For security architects evaluating loxilb-enterprise, this page serves as the starting point. Each pillar links to detailed feature pages with source-traced configuration examples.
+For security architects evaluating loxilb-enterprise, this page serves as the starting point. Each pillar links to detailed feature pages with REST API configuration examples.
 
 ## Security Architecture
 
@@ -26,13 +26,23 @@ flowchart LR
     B -->|SYN flood check\nIP filter| C[L4 Policy Engine]
     C -->|OPA firewall rules\nRate limiting| D[L7 Inspection]
     D -->|Presidio PII scan\nLlamaFirewall AI safety| E[Backend Services]
-
-    B -.- B1["Source: dpebpf_linux.go"]
-    C -.- C1["Source: pkg/opa/, pkg/ratelimit/"]
-    D -.- D1["Source: pkg/presidio/, pkg/llamafirewall/"]
 ```
 
 Traffic passes through layers in order: kernel-level eBPF filtering first (fastest, drops obvious attacks), then L4 policy enforcement (OPA rules, rate limits), then L7 content inspection (PII detection, AI safety). Each layer can independently drop or pass traffic.
+
+## REST API Configuration
+
+The Security Gateway exposes its features through the following REST API endpoint groups:
+
+| Feature | API Endpoint | Reference |
+|---------|-------------|-----------|
+| OPA Policy Watcher | `POST /config/opa/watcher` | [API Reference](../reference/api.md#opa-policy-watcher) |
+| PII Detection (Presidio) | `POST /config/pii/configure` | [API Reference](../reference/api.md#pii-detection-presidio) |
+| LlamaFirewall | `POST /config/llamafirewall/enable` | [API Reference](../reference/api.md#llamafirewall) |
+| IPsec Tunnels | `POST /config/ipsec/tunnels` | [API Reference](../reference/api.md#ipsec) |
+| Security Controls | `POST /config/securityrate` | [API Reference](../reference/api.md#security-controls) |
+| IP Filtering | `POST /config/ipfilter` | [API Reference](../reference/api.md#security-controls) |
+| SNI/mTLS Certificates | `PUT /config/loadbalancer/{name}` | [API Reference](../reference/api.md#sni-certificates) |
 
 ## Fail Mode Reference
 
@@ -78,9 +88,34 @@ When deploying multiple security services, ensure no port conflicts:
 ### Operations
 
 - **[Deployment Scenarios](deployment-scenarios.md)** — Four deployment patterns showing how Security Gateway features combine for different compliance requirements.
-- **[Configuration Reference](configuration-reference.md)** — Cross-feature quick-reference table with all config fields, defaults, and source file locations.
+- **[Configuration Reference](configuration-reference.md)** — Cross-feature quick-reference table with all config fields and defaults.
+
+## Verify
+
+Confirm the Security Gateway is operational by checking the status of configured features:
+
+```bash
+# Check OPA watcher status
+curl http://loxilb:11111/netlox/v1/config/opa/watcher \
+  -H "Authorization: Bearer <token>"
+
+# Check LlamaFirewall status
+curl http://loxilb:11111/netlox/v1/config/llamafirewall/status \
+  -H "Authorization: Bearer <token>"
+
+# Check PII detection status
+curl http://loxilb:11111/netlox/v1/config/pii/status \
+  -H "Authorization: Bearer <token>"
+
+# Check IPsec tunnels
+curl http://loxilb:11111/netlox/v1/config/ipsec/tunnels/all \
+  -H "Authorization: Bearer <token>"
+```
+
+Each endpoint returns the current configuration and health status of its respective feature. See individual feature pages for expected response details.
 
 ## See Also
 
+- [Full API Reference](../reference/api.md) — Complete REST API documentation
 - [AI Gateway Overview](../ai-gateway/overview.md) — AI Gateway features that complement Security Gateway data protection
 - [Getting Started](../getting-started/installation.md) — Enterprise binary installation and initial setup
