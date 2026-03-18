@@ -67,7 +67,7 @@
   3. No source-code line annotations remain on any Network Gateway page
   4. Every Network Gateway page links to its corresponding API spec section in reference/api.md
   5. Every Network Gateway page follows the "Concept -> REST API Config -> Verify -> Troubleshoot" structure
-**Plans**: TBD
+**Plans**: 08-01 (egress-lb + dsr + nat64), 08-02 (https-proxy + http2-proxy), 08-03 (overview + sctp-multihoming) — all wave 1
 
 ## Progress
 
@@ -80,4 +80,4 @@
 | 5. Reference | v1.0 | 2/2 | Complete | 2026-03-17 |
 | 6. AI Gateway API Enhancement | v1.1 | 0/3 | Planned | - |
 | 7. Security Gateway API Enhancement | v1.1 | 0/3 | Planned | - |
-| 8. Network Gateway API Enhancement | v1.1 | 0/TBD | Not started | - |
+| 8. Network Gateway API Enhancement | v1.1 | 0/3 | Planned | - |
