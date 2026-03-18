@@ -18,17 +18,27 @@ loxilb solves this with `sse_mode: true`, which **suppresses idle timeout during
 
 ## Configuration
 
-```yaml
-# SSE Streaming Config
-# Source: common/common.go:878-882
-serviceArguments:
-  vip: "192.168.1.100"
-  port: 443
-  protocol: "tcp"
-  mode: 4                         # LBModeFullProxy required
-  backend_protocol: "http1"
-  sse_mode: true                  # suppress idle timeout during streaming (Source: common/common.go:878)
-  max_stream_duration_sec: 3600   # 1 hour cap (Source: common/common.go:882)
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "backend_protocol": "http1",
+      "sse_mode": true,
+      "max_stream_duration_sec": 3600
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.1.1", "targetPort": 8080, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
 ```
 
 **`max_stream_duration_sec`:** Maximum allowed stream duration in seconds. Set `0` for the hard cap of 86400 seconds (24 hours, from `PROXY_SSE_HARD_CAP_SEC`). For production, set an explicit value based on your longest expected generation time.
@@ -40,7 +50,6 @@ serviceArguments:
 
     This means a user will never have their response cut off due to quota exhaustion. The quota check prevents the next request, not the current one.
 
-    Source: ai_gateway_dp.go:314-316
 
 ### How Token Counting Works
 
@@ -52,7 +61,6 @@ loxilb tracks SSE stream lifecycle events via CGO bridge functions:
 | Stream end | `llb_ai_stream_end()` | SSE event `data: [DONE]` received |
 | Quota consume | `llb_ai_token_quota_consume()` | After stream end, extract usage from final chunk |
 
-(Source: ai_gateway_dp.go:300-480)
 
 ### Missing Usage Chunk
 
@@ -68,22 +76,72 @@ This means token quotas are only as accurate as the backend's usage reporting. I
 Token quotas are configured per-tenant via the REST API:
 
 ```bash
-# POST /config/ai/tenant/ratelimit
-# Source: common/common.go:1779, api/swagger.yml:5958
-curl -X POST http://loxilb:11111/config/ai/tenant/ratelimit \
+curl -X POST http://loxilb:11111/netlox/v1/config/ai/tenant/ratelimit \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
     "tenant_id": "acme-corp",
     "rps": 500,
     "tokens_per_min": 1000000
   }'
+
+# Response (204): No content — upsert applied
 ```
 
-| Field | Type | Description | Source |
-|-------|------|-------------|--------|
-| `tenant_id` | string | Tenant identifier (matches API key `tenant_id`) | common/common.go:1779 |
-| `rps` | int | Requests per second limit for this tenant (all keys combined) | common/common.go:1779 |
-| `tokens_per_min` | int | Token quota per minute for this tenant | common/common.go:1779 |
+### Get Tenant Rate Limit
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/ai/tenant/ratelimit/acme-corp \
+  -H "Authorization: Bearer <token>"
+
+# Response (200):
+# {
+#   "tenant_id": "acme-corp",
+#   "rps": 500,
+#   "tokens_per_min": 1000000,
+#   "updated_at": "2026-03-18T10:30:00Z"
+# }
+```
+
+### Tenant Rate Limit Fields
+
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `tenant_id` | string | any string | - | Tenant identifier (matches API key `tenant_id`) |
+| `rps` | int | > 0 | `0` (unlimited) | Requests per second limit for this tenant (all keys combined) |
+| `tokens_per_min` | int | > 0 | `0` (unlimited) | Token quota per minute for this tenant |
+
+### SSE Configuration Fields
+
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `sse_mode` | bool | `true`, `false` | `false` | Suppress idle timeout during SSE streaming |
+| `max_stream_duration_sec` | int | >= 0 | `0` (24h cap) | Maximum stream duration in seconds. `0` = 24-hour hard cap |
+
+## Verify
+
+Confirm tenant rate limits are configured:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/ai/tenant/ratelimit/acme-corp \
+  -H "Authorization: Bearer <token>"
+
+# Expected response:
+# {
+#   "tenant_id": "acme-corp",
+#   "rps": 500,
+#   "tokens_per_min": 1000000
+# }
+```
+
+Also verify SSE mode is enabled on your service rule by checking the service listing:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>"
+```
+
+Confirm `sse_mode: true` is set in the response for your AI Gateway service.
 
 ## Troubleshooting
 
@@ -121,3 +179,4 @@ curl -X POST http://loxilb:11111/config/ai/tenant/ratelimit \
 - [API Key Management](api-key-management.md) — Per-key rate limiting and the `--userservice` prerequisite
 - [AI Gateway Overview](overview.md) — Full traffic flow showing where SSE quota fits in the pipeline
 - [Configuration Reference](configuration-reference.md) — All AI Gateway config fields
+- [Tenant Rate Limits API Reference](../reference/api.md#ai-gateway-tenant-rate-limits)
