@@ -55,7 +55,7 @@
   3. No source-code line annotations remain on any Security Gateway page
   4. Every Security Gateway page links to its corresponding API spec section in reference/api.md
   5. Every Security Gateway page follows the "Concept -> REST API Config -> Verify -> Troubleshoot" structure
-**Plans**: TBD
+**Plans**: 07-01 (opa-policy-enforcement + syn-flood + ip-filtering), 07-02 (rate-limiting + llamafirewall + presidio + ipsec + mtls), 07-03 (overview + secure-dataplane + deployment-scenarios + configuration-reference) — all wave 1
 
 ### Phase 8: Network Gateway API Enhancement
 **Goal**: Operators can configure every Network Gateway feature using documented REST API examples without reading source code
@@ -79,5 +79,5 @@
 | 4. Network Gateway & Operations | v1.0 | 4/4 | Complete | 2026-03-17 |
 | 5. Reference | v1.0 | 2/2 | Complete | 2026-03-17 |
 | 6. AI Gateway API Enhancement | v1.1 | 0/3 | Planned | - |
-| 7. Security Gateway API Enhancement | v1.1 | 0/TBD | Not started | - |
+| 7. Security Gateway API Enhancement | v1.1 | 0/3 | Planned | - |
 | 8. Network Gateway API Enhancement | v1.1 | 0/TBD | Not started | - |
