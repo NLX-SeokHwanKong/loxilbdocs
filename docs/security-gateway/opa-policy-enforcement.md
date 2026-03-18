@@ -24,13 +24,6 @@ flowchart LR
     D -->|REST API\n/netlox/v1/config/firewall| E[loxilb Dataplane]
 ```
 
-**Source files:**
-
-- `pkg/opa/watcher.go` — Polling loop, WatcherConfig
-- `pkg/opa/fetcher.go` — HTTP client, 5s timeout, circuit breaker guard
-- `pkg/opa/normalizer.go` — Rego output (OPARule) to loxilb firewall rule (FwRuleArg) mapping
-- `pkg/opa/applier.go` — REST API push to loxilb (`/netlox/v1/config/firewall`)
-
 ### Circuit Breaker
 
 If the OPA server becomes unreachable, the circuit breaker prevents repeated failed requests:
@@ -41,37 +34,38 @@ If the OPA server becomes unreachable, the circuit breaker prevents repeated fai
 | **Open** (OPA down) | Fetcher skips OPA queries, uses last known rules |
 | **Half-open** (testing) | Fetcher sends a single test query to check recovery |
 
-Source: `pkg/opa/types.go` — CircuitBreakerState
+## REST API Configuration
 
-## Configuration
+### Configure OPA Watcher
 
-### OPA Watcher — REST API
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/opa/watcher \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "opa_url": "http://opa-server:8181",
+    "policy_path": "loxilb/l4",
+    "poll_interval_sec": 30,
+    "fail_open": false,
+    "initial_delay_sec": 10,
+    "loxilb_url": "http://localhost:11111",
+    "state_path": "/var/lib/loxilb/opa_state.json"
+  }'
 
-```json
-// Source: pkg/opa/watcher.go:37-53, swagger.yml:9902-9921
-POST /config/opa/watcher
-{
-  "opa_url": "http://opa:8181",
-  "policy_path": "loxilb/l4",
-  "poll_interval_sec": 30,
-  "fail_open": false,
-  "initial_delay_sec": 10,
-  "loxilb_url": "http://localhost:11111",
-  "state_path": "/var/lib/loxilb/opa_state.json"
-}
+# Response (200): {"result": "Success"}
 ```
 
-**Field reference:**
+### Field Reference
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `opa_url` | string | (required) | HTTP endpoint of the OPA server |
-| `policy_path` | string | `"loxilb/l4"` | Rego package path to query |
-| `poll_interval_sec` | int | `30` | Seconds between policy fetches |
-| `fail_open` | bool | `false` | Allow traffic when OPA is unreachable |
-| `initial_delay_sec` | int | `10` | Seconds to wait before first poll |
-| `loxilb_url` | string | `"http://localhost:11111"` | loxilb REST API base URL for rule push |
-| `state_path` | string | `""` | File path for persisting watcher state |
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `opa_url` | string | Any HTTP/HTTPS URL | (required) | HTTP endpoint of the OPA server |
+| `policy_path` | string | OPA policy path string | `"loxilb/l4"` | Rego package path to query |
+| `poll_interval_sec` | int | `> 0` (integer) | `30` | Seconds between policy fetches |
+| `fail_open` | bool | `true`, `false` | `false` | Allow traffic when OPA is unreachable |
+| `initial_delay_sec` | int | `>= 0` (integer) | `10` | Seconds to wait before first poll |
+| `loxilb_url` | string | Any HTTP/HTTPS URL | `"http://localhost:11111"` | loxilb REST API base URL for rule push |
+| `state_path` | string | File system path | `""` | File path for persisting watcher state |
 
 !!! danger "OPA defaults to fail-closed"
     When `fail_open: false` (the default), an unreachable OPA server means **no firewall rules are updated** and existing rules remain. If the watcher has never successfully fetched policies, **no rules will be installed** and default network behavior applies.
@@ -86,14 +80,11 @@ POST /config/opa/watcher
 | Get watcher status | GET | `/config/opa/watcher` |
 | Remove watcher | DELETE | `/config/opa/watcher` |
 
-The GET endpoint returns `WatcherStatus` with `last_sync` timestamp, `rules_count`, and `circuit_breaker_state`.
-
 ## Writing Rego Policies for loxilb
 
 The Rego policy package **must match** the `policy_path` configured in the watcher. The default path is `loxilb/l4`, so the Rego package declaration must be:
 
 ```rego
-# Source: pkg/opa/watcher.go:33 — defaultOPAPolicy = "loxilb/l4"
 package loxilb.l4
 
 import future.keywords.in
@@ -148,14 +139,11 @@ The `firewall_access_rules` array must contain objects matching the `OPARule` st
 | `action` | string | `"allow"` or `"deny"` | `"allow"` |
 | `preference` | int | Rule priority (higher = processed first) | `100` |
 
-Source: `pkg/opa/types.go:21-27`
-
 ### How the Fetcher Queries OPA
 
 The OPA fetcher sends `GET {opa_url}/v1/data/{policy_path}` and expects a JSON response with this structure:
 
 ```json
-// Source: pkg/opa/types.go:21-27 (OPAPolicyResponse)
 {
   "result": {
     "l4": {
@@ -179,9 +167,28 @@ The OPA fetcher sends `GET {opa_url}/v1/data/{policy_path}` and expects a JSON r
 
 The normalizer converts each `OPARule` into a `FwRuleArg` that the loxilb dataplane understands, and the applier pushes rules via REST API to `/netlox/v1/config/firewall`.
 
-## Monitoring and Troubleshooting
+## Verify
 
-### Common Issues
+Confirm the OPA watcher is running and policies are being applied:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/opa/watcher \
+  -H "Authorization: Bearer <token>"
+
+# Response (200):
+# {
+#   "opa_url": "http://opa-server:8181",
+#   "policy_path": "loxilb/l4",
+#   "poll_interval_sec": 30,
+#   "fail_open": false,
+#   "status": "running",
+#   "last_poll": "2025-01-15T10:30:00Z"
+# }
+```
+
+Check that `status` is `"running"` and `last_poll` shows a recent timestamp. If `status` shows an error state, check the Troubleshoot section below.
+
+## Troubleshoot
 
 | Symptom | Likely Cause | Resolution |
 |---------|-------------|------------|
@@ -190,20 +197,9 @@ The normalizer converts each `OPARule` into a `FwRuleArg` that the loxilb datapl
 | Rules not updating | Circuit breaker in open state | Check `GET /config/opa/watcher` for `circuit_breaker_state` |
 | Partial rule updates | Diff engine detected only some changes | Expected behavior — only changed rules are applied |
 
-### Checking Watcher Status
-
-```bash
-# Check watcher health
-curl http://localhost:11111/config/opa/watcher
-
-# Response includes:
-# - last_sync: timestamp of last successful policy fetch
-# - rules_count: number of active firewall rules from OPA
-# - circuit_breaker_state: closed/open/half-open
-```
-
 ## See Also
 
+- [OPA Policy Watcher API Reference](../reference/api.md#opa-policy-watcher)
 - [Security Gateway Overview](overview.md) — Fail-mode comparison table, port allocation
 - [Rate Limiting](rate-limiting.md) — Complementary traffic control at the API key level
 - [IP Filtering](ip-filtering.md) — IP-based access control at the eBPF dataplane level

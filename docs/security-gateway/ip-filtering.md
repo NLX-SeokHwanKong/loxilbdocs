@@ -10,63 +10,74 @@ IP filtering provides IP-based access control at the eBPF dataplane level. You c
 
 This is the first line of defense — packets matching blacklist rules are dropped at the TC hook with minimal CPU overhead. For network administrators, IP filtering provides the equivalent of edge firewall ACLs, but implemented in eBPF for high-throughput environments.
 
-## Filter Configuration
+## REST API Configuration
 
 ### Adding a Filter Rule
 
-```json
-// Source: common/common.go:465-477 (IPFilterMod)
-POST /config/ipfilter
-{
-  "filterType": "blacklist",
-  "cidr": "192.0.2.0/24",
-  "zone": 0,
-  "priority": 100,
-  "action": "drop"
-}
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/ipfilter \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filterType": "blacklist",
+    "cidr": "192.0.2.0/24",
+    "zone": 0,
+    "priority": 100,
+    "action": "drop"
+  }'
+
+# Response (200): {"result": "Success"}
 ```
 
 ### Field Reference
 
-| Field | Type | Description | Values |
-|-------|------|-------------|--------|
-| `filterType` | string | Filter list type | `"whitelist"` or `"blacklist"` |
-| `cidr` | string | IP range in CIDR notation | e.g., `"192.0.2.0/24"`, `"10.0.0.1/32"` |
-| `zone` | int | Filtering zone | Default: `0` |
-| `priority` | int | Rule priority (higher = processed first) | e.g., `100` |
-| `action` | string | Action when rule matches | `"allow"` or `"drop"` |
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `filterType` | string | `"whitelist"`, `"blacklist"` | (required) | Filter list type |
+| `cidr` | string | CIDR notation (e.g., `"192.0.2.0/24"`) | (required) | IP range to filter |
+| `zone` | int | `0` to N (integer) | `0` | Filtering zone |
+| `priority` | int | `0`–`999` (lower = higher priority) | — | Rule priority |
+| `action` | string | `"allow"`, `"drop"` | (required) | Action when rule matches |
 
 ### Whitelist Example
 
 Allow only trusted networks:
 
-```json
-POST /config/ipfilter
-{
-  "filterType": "whitelist",
-  "cidr": "10.0.0.0/8",
-  "zone": 0,
-  "priority": 100,
-  "action": "allow"
-}
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/ipfilter \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filterType": "whitelist",
+    "cidr": "10.0.0.0/8",
+    "zone": 0,
+    "priority": 100,
+    "action": "allow"
+  }'
+
+# Response (200): {"result": "Success"}
 ```
 
 ### Blacklist Example
 
 Block a known malicious range:
 
-```json
-POST /config/ipfilter
-{
-  "filterType": "blacklist",
-  "cidr": "198.51.100.0/24",
-  "zone": 0,
-  "priority": 200,
-  "action": "drop"
-}
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/ipfilter \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filterType": "blacklist",
+    "cidr": "198.51.100.0/24",
+    "zone": 0,
+    "priority": 200,
+    "action": "drop"
+  }'
+
+# Response (200): {"result": "Success"}
 ```
 
-## API Operations
+### API Operations
 
 | Operation | Method | Endpoint | Description |
 |-----------|--------|----------|-------------|
@@ -74,18 +85,27 @@ POST /config/ipfilter
 | Remove filter rule | DELETE | `/config/ipfilter` | Remove an existing IP filter rule |
 | List all filter rules | GET | `/config/ipfilter/all` | List all rules with packet/byte counters |
 
-Source: swagger.yml:3171 and 3194, `pkg/loxinet/apiclient.go:599-695`
+## Verify
 
-## Monitoring
-
-Each `IPFilterEntry` includes packet and byte counters that track rule hit rates:
+List all IP filter rules and confirm configuration:
 
 ```bash
-# List all IP filter rules with counters
-curl http://localhost:11111/config/ipfilter/all
+curl http://loxilb:11111/netlox/v1/config/ipfilter/all \
+  -H "Authorization: Bearer <token>"
+
+# Response (200):
+# [
+#   {
+#     "filterType": "blacklist",
+#     "cidr": "192.0.2.0/24",
+#     "priority": 100,
+#     "packets": 0,
+#     "bytes": 0
+#   }
+# ]
 ```
 
-The response includes for each rule:
+Each rule includes packet and byte counters that track rule hit rates:
 
 | Counter | Description |
 |---------|-------------|
@@ -98,8 +118,17 @@ Use these counters to:
 - Identify the most-hit rules for optimization
 - Detect attack patterns by monitoring blacklist hit rates
 
+## Troubleshoot
+
+| Symptom | Likely Cause | Resolution |
+|---------|-------------|------------|
+| Rules not matching traffic | Incorrect CIDR format or wrong zone assignment | Verify CIDR notation is correct and zone matches the target interface |
+| Counters not incrementing | Rule priority order incorrect or traffic not reaching the filter | Check rule priority values; lower priority = higher precedence |
+| Whitelist bypass not working | `filterType` set to `"blacklist"` instead of `"whitelist"` | Verify `filterType` field value matches intended behavior |
+
 ## See Also
 
+- [Security Controls API Reference](../reference/api.md#security-controls)
 - [SYN Flood Protection](syn-flood.md) — Complementary eBPF-level DDoS mitigation
 - [OPA Policy Enforcement](opa-policy-enforcement.md) — Dynamic L4 firewall rules driven by OPA policies
 - [Secure Dataplane Overview](secure-dataplane.md) — How eBPF security fits in the layered architecture
