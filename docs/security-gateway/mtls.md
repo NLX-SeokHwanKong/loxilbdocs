@@ -13,31 +13,59 @@ Standard TLS only validates the server's identity (the client verifies the serve
 !!! warning "FullProxy mode required"
     mTLS only works with `security=1` (HTTPS) or `security=2` (E2E HTTPS) and `mode=4` (FullProxy). It has **no effect** in DSR or NAT mode.
 
-    Source: swagger.yml:6360
+## REST API Configuration
+
+mTLS fields (`mtls_frontend`, `mtls_backend`) are part of the load balancer service rule. They are applied when creating or updating a load balancer service:
+
+```bash
+curl -X PUT http://loxilb:11111/netlox/v1/config/loadbalancer/secure-api \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "secure-api",
+    "host": "api.corp.example.com",
+    "port": 443,
+    "protocol": "https",
+    "mode": 4,
+    "security": 1,
+    "mtls_frontend": {
+      "client_cert_mode": "required",
+      "client_ca_path": "/opt/loxilb/cert/client_ca.crt",
+      "require_client_cn": true,
+      "client_cn_pattern": "*.internal.corp.example.com"
+    },
+    "mtls_backend": {
+      "verify_server_cert": true,
+      "backend_ca_path": "/opt/loxilb/cert/backend_ca.crt",
+      "client_cert_path": "/opt/loxilb/cert/lb_client.crt",
+      "client_key_path": "/opt/loxilb/cert/lb_client.key"
+    },
+    "endpoints": [
+      {"ep_address": "10.0.1.10", "ep_port": 8443}
+    ]
+  }'
+
+# Response (200): {"result": "Success"}
+```
+
+This configuration:
+
+1. **Frontend:** Requires all clients to present a certificate signed by `client_ca.crt` with a CN matching `*.internal.corp.example.com`
+2. **Backend:** Verifies backend server certificates against `backend_ca.crt` and presents `lb_client.crt` as loxilb's identity to backends
 
 ## Frontend mTLS (Client Certificate Validation)
 
 Frontend mTLS controls how loxilb validates **incoming client certificates**. When a client connects to a load-balanced HTTPS service, loxilb can require and validate the client's certificate.
 
-```json
-// Source: common/common_mtls.go:34-56 (MTLSFrontendConfig)
-"mtls_frontend": {
-  "client_cert_mode": "required",
-  "client_ca_path": "/opt/loxilb/cert/client_ca_bundle.crt",
-  "require_client_cn": true,
-  "client_cn_pattern": "*.corp.example.com"
-}
-```
-
 ### Frontend Field Reference
 
-| Field | Type | Description | Values |
-|-------|------|-------------|--------|
-| `client_cert_mode` | string | Client certificate requirement | `"disabled"`, `"optional"`, `"required"` |
-| `client_ca_path` | string | Path to CA bundle for validating client certs | File path |
-| `client_ca_cert_data` | string | Inline CA certificate (alternative to path) | PEM-encoded |
-| `require_client_cn` | bool | Enforce Common Name matching | `true` / `false` |
-| `client_cn_pattern` | string | Glob pattern for allowed CNs | e.g., `"*.corp.example.com"` |
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `client_cert_mode` | string | `"disabled"`, `"optional"`, `"required"` | `"disabled"` | Client certificate requirement |
+| `client_ca_path` | string | File system path | — | Path to CA bundle for validating client certs |
+| `client_ca_cert_data` | string | PEM-encoded certificate | — | Inline CA certificate (alternative to path) |
+| `require_client_cn` | bool | `true`, `false` | `false` | Enforce Common Name matching |
+| `client_cn_pattern` | string | Glob pattern | — | Pattern for allowed CNs (e.g., `"*.corp.example.com"`) |
 
 **Client certificate modes:**
 
@@ -51,80 +79,64 @@ Frontend mTLS controls how loxilb validates **incoming client certificates**. Wh
 
 Backend mTLS controls how loxilb authenticates to **backend servers** and verifies their certificates. When loxilb forwards traffic to a backend, it can present its own certificate and verify the backend's certificate.
 
-```json
-// Source: common/common_mtls.go (MTLSBackendConfig)
-"mtls_backend": {
-  "verify_server_cert": true,
-  "backend_ca_path": "/opt/loxilb/cert/backend_ca.crt",
-  "client_cert_path": "/opt/loxilb/cert/client.crt",
-  "client_key_path": "/opt/loxilb/cert/client.key"
-}
-```
-
 ### Backend Field Reference
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `verify_server_cert` | bool | Validate backend server certificate |
-| `backend_ca_path` | string | CA for verifying backend server certs |
-| `client_cert_path` | string | Client certificate loxilb presents to backends |
-| `client_key_path` | string | Private key for the client certificate |
-| `client_cert_data` | string | Inline client certificate (alternative to path) |
-| `client_key_data` | string | Inline private key (alternative to path) |
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `verify_server_cert` | bool | `true`, `false` | `false` | Validate backend server certificate |
+| `backend_ca_path` | string | File system path | — | CA for verifying backend server certs |
+| `client_cert_path` | string | File system path | — | Client certificate loxilb presents to backends |
+| `client_key_path` | string | File system path | — | Private key for the client certificate |
+| `client_cert_data` | string | PEM-encoded certificate | — | Inline client certificate (alternative to path) |
+| `client_key_data` | string | PEM-encoded key | — | Inline private key (alternative to path) |
 
 ## TLS Version Support
 
 !!! note "TLS configuration is managed at the OpenSSL layer"
-    TLS version and cipher suite configuration is managed at the OpenSSL layer in the C data plane (sockproxy). The Go configuration types (`MTLSFrontendConfig`, `MTLSBackendConfig`) do not expose TLS version fields directly. Contact support for cipher suite customization requirements.
+    TLS version and cipher suite configuration is managed at the OpenSSL layer in the C data plane (sockproxy). Contact support for cipher suite customization requirements.
 
-    Source confidence: LOW (C layer implementation)
+## Verify
 
-## Integration with Load Balancer Rules
-
-mTLS fields (`mtls_frontend`, `mtls_backend`) are part of the load balancer service rule. They are applied when creating or updating a load balancer service:
+Confirm mTLS configuration is applied to a load balancer rule:
 
 ```bash
-# Apply via load balancer rule API
-PUT /netlox/v1/config/loadbalancer/{name}
+curl http://loxilb:11111/netlox/v1/config/loadbalancer/secure-api \
+  -H "Authorization: Bearer <token>"
+
+# Response (200):
+# {
+#   "name": "secure-api",
+#   "host": "api.corp.example.com",
+#   "port": 443,
+#   "protocol": "https",
+#   "mode": 4,
+#   "security": 1,
+#   "mtls_frontend": {
+#     "client_cert_mode": "required",
+#     "client_ca_path": "/opt/loxilb/cert/client_ca.crt",
+#     "require_client_cn": true,
+#     "client_cn_pattern": "*.internal.corp.example.com"
+#   },
+#   "mtls_backend": {
+#     "verify_server_cert": true,
+#     "backend_ca_path": "/opt/loxilb/cert/backend_ca.crt"
+#   }
+# }
 ```
 
-Source: `pkg/loxinet/rules.go:338, 877, 2141`
+Check that `mtls_frontend.client_cert_mode` is `"required"` and `mtls_backend.verify_server_cert` is `true` if you intend full mutual authentication.
 
-### Example: Full mTLS Load Balancer Rule
+## Troubleshoot
 
-```json
-{
-  "name": "secure-api",
-  "host": "api.corp.example.com",
-  "port": 443,
-  "protocol": "https",
-  "mode": 4,
-  "security": 1,
-  "mtls_frontend": {
-    "client_cert_mode": "required",
-    "client_ca_path": "/opt/loxilb/cert/client_ca.crt",
-    "require_client_cn": true,
-    "client_cn_pattern": "*.internal.corp.example.com"
-  },
-  "mtls_backend": {
-    "verify_server_cert": true,
-    "backend_ca_path": "/opt/loxilb/cert/backend_ca.crt",
-    "client_cert_path": "/opt/loxilb/cert/lb_client.crt",
-    "client_key_path": "/opt/loxilb/cert/lb_client.key"
-  },
-  "endpoints": [
-    {"ep_address": "10.0.1.10", "ep_port": 8443}
-  ]
-}
-```
-
-This configuration:
-
-1. **Frontend:** Requires all clients to present a certificate signed by `client_ca.crt` with a CN matching `*.internal.corp.example.com`
-2. **Backend:** Verifies backend server certificates against `backend_ca.crt` and presents `lb_client.crt` as loxilb's identity to backends
+| Symptom | Likely Cause | Resolution |
+|---------|-------------|------------|
+| mTLS not working in NAT mode | Wrong load balancer mode — mTLS requires FullProxy (mode=4) | Ensure `mode: 4` and `security: 1` or `security: 2` in the LB rule |
+| CN pattern not matching | Glob pattern does not match client certificate CN | Verify `client_cn_pattern` against the actual CN in client certificates |
+| Backend certificate verification failing | CA cert path incorrect or cert chain incomplete | Check `backend_ca_path` exists and contains the correct CA; verify cert chain |
 
 ## See Also
 
+- [SNI Certificates API Reference](../reference/api.md#sni-certificates)
 - [Secure Dataplane Overview](secure-dataplane.md) — How mTLS fits in the three-layer security architecture
 - [IPsec Configuration](ipsec.md) — L3 tunnel encryption (complementary to L7 mTLS)
 - [Deployment Scenarios](deployment-scenarios.md) — Full Enterprise Security Gateway deployment pattern
