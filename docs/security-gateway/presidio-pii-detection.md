@@ -38,13 +38,11 @@ For comprehensive protection, **enable both**: Presidio catches structural PII p
 
 ## Architecture
 
-loxilb communicates with Presidio through two mechanisms:
+loxilb communicates with Presidio through a REST API for configuration management and gRPC for runtime scanning.
 
-### Shared Memory Configuration
+### REST API Configuration
 
-loxilb reads Presidio configuration from a **shared memory segment** at `/dev/shm/loxilb_presidio_config` (20KB). This shared memory contains the Presidio service endpoints and detection configuration.
-
-(Source: pkg/presidio/config.go)
+The REST API manages Presidio configuration. The shared memory mechanism is the runtime implementation — the REST API writes configuration that the dataplane reads from shared memory at `/dev/shm/loxilb_presidio_config`.
 
 ### gRPC Endpoints
 
@@ -60,7 +58,6 @@ Presidio exposes two gRPC services:
 ```
 Request arrives at AI Gateway
   → sockproxy extracts prompt text
-  → Shared memory config read (/dev/shm/loxilb_presidio_config)
   → Presidio Analyzer identifies PII entities via gRPC
   → Presidio Anonymizer redacts entities (if configured)
   → Clean prompt forwarded to backend LLM
@@ -69,20 +66,45 @@ Request arrives at AI Gateway
 !!! info "Port Allocation"
     Presidio Analyzer defaults to port **50051**. [LlamaFirewall](llamafirewall.md) uses port **50052** to avoid conflict. If you run both services, verify port assignments.
 
-## Configuration
+## REST API Configuration
 
-Presidio configuration is managed through the shared memory segment — there is no REST API endpoint for Presidio configuration. All settings are read from shared memory by the C dataplane layer.
+### Enable PII Detection
 
-- **Shared memory path:** `/dev/shm/loxilb_presidio_config`
-- **Size:** 20KB
-- **Analyzer endpoint:** `presidio-analyzer:50051` (default)
-- **Anonymizer endpoint:** Separate service (default port varies by deployment)
-- **Key config struct:** `PresidioConfig` from `pkg/presidio/config.go`
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/pii/enable \
+  -H "Authorization: Bearer <token>"
+
+# Response (200): {"result": "Success"}
+```
+
+### Configure PII Detection
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/pii/configure \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "presidio_url": "http://presidio-analyzer:5002",
+    "score_threshold": 0.7,
+    "entities": ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD"],
+    "action": "redact"
+  }'
+
+# Response (200): {"result": "Success"}
+```
+
+### Configuration Field Reference
+
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `presidio_url` | string | Any HTTP/HTTPS URL | (required) | Presidio analyzer service endpoint |
+| `score_threshold` | float | `0.0`–`1.0` | `0.7` | Minimum confidence score to flag PII |
+| `entities` | string[] | `"PERSON"`, `"EMAIL_ADDRESS"`, `"PHONE_NUMBER"`, `"CREDIT_CARD"`, etc. | All entities | PII entity types to detect |
+| `action` | string | `"redact"`, `"mask"`, `"log"` | `"redact"` | Action when PII is detected |
+| `direction` | string | `"request"`, `"response"`, `"both"` | `"request"` | Which traffic direction to scan |
 
 !!! note "Configuration update behavior"
-    Configuration updates via shared memory take effect on the next request cycle, not mid-request. The Go layer writes to `/dev/shm/loxilb_presidio_config` using `unix.Msync(MS_SYNC)`, and the C dataplane reads this continuously. For production configuration changes during high traffic, deploy during a maintenance window or low-traffic period to avoid brief gaps in PII detection.
-
-(Source: pkg/presidio/config.go)
+    Configuration updates take effect on the next request cycle, not mid-request. For production configuration changes during high traffic, deploy during a maintenance window or low-traffic period to avoid brief gaps in PII detection.
 
 ## Deployment
 
@@ -145,8 +167,37 @@ Gateway-layer PII interception serves as a **technical control for data minimiza
 !!! note "Compliance Advisory"
     Gateway-layer PII detection is a **technical control**, not a complete compliance solution. GDPR and CCPA compliance requires a broader program including data inventory, consent management, data subject rights processes, and legal review. Consult your legal team for full compliance requirements.
 
+## Verify
+
+Confirm PII detection is enabled and configured:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/pii/status \
+  -H "Authorization: Bearer <token>"
+
+# Response (200):
+# {
+#   "enabled": true,
+#   "presidio_url": "http://presidio-analyzer:5002",
+#   "score_threshold": 0.7,
+#   "entities": ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD"],
+#   "action": "redact"
+# }
+```
+
+Check that `enabled` is `true` and configuration values match your intended settings.
+
+## Troubleshoot
+
+| Symptom | Likely Cause | Resolution |
+|---------|-------------|------------|
+| PII not detected | Entity types not included in `entities` list, or `score_threshold` too high | Verify `entities` list includes target PII types; lower `score_threshold` if needed |
+| Presidio connection failed | `presidio_url` incorrect or analyzer service not running | Check `presidio_url` value; verify Presidio analyzer container is running on the expected port |
+| High false positive rate | `score_threshold` too low | Increase `score_threshold` (e.g., from 0.5 to 0.7) to reduce false positives |
+
 ## See Also
 
+- [PII Detection (Presidio) API Reference](../reference/api.md#pii-detection-presidio)
 - [Security Gateway Overview](overview.md) — Fail-mode comparison table, port allocation for all security services
 - [LlamaFirewall](llamafirewall.md) — Complementary semantic AI content safety (uses port 50052, Presidio uses 50051)
 - [AI Gateway Overview](../ai-gateway/overview.md) — Full traffic flow and architecture
