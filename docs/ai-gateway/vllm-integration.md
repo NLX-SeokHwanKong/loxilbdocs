@@ -22,8 +22,7 @@ After scraping, the `VllmScraper` updates the C-side queue depth via `llb_ai_upd
 **Scraper details:**
 
 - Scrape interval: 10 seconds (configurable via `NewVllmScraper` interval parameter)
-- Timeout per scrape request: 5 seconds (Source: ai_vllm_scraper.go:89)
-- Source: ai_vllm_scraper.go:43-92, :175-191
+- Timeout per scrape request: 5 seconds
 
 ## GPU-Aware Load Balancing
 
@@ -44,31 +43,41 @@ The selection algorithm combines queue depth and cache usage:
 
 **Guideline:** If your users have multi-turn conversations (chat applications), use `sel: 8` with KV-exact routing. If your workload is primarily independent single-shot queries (batch inference, RAG pipelines), use `sel: 9` for throughput optimization.
 
-## Configuration
+## REST API Config
 
-The vLLM scraper auto-activates when AI Gateway endpoints are configured — there is no separate scraper configuration in the LB rule. You only need to configure your endpoints to point at vLLM instances:
+The vLLM scraper auto-activates when AI Gateway endpoints are configured — there is no separate scraper configuration in the LB rule. Configure GPU-aware load balancing via `POST /config/services`:
 
-```yaml
-# GPU-Aware Load Balancing Config
-# Source: common/common.go:925-945
-serviceArguments:
-  vip: "192.168.1.100"
-  port: 443
-  protocol: "tcp"
-  mode: 4                   # LBModeFullProxy required
-  sel: 9                    # LbSelGPUAware — uses vLLM metrics (Source: common/common.go:696)
-  backend_protocol: "http1"
-endpoints:
-  - endpointIP: "10.0.1.10"
-    targetPort: 8080         # vLLM serving port
-    weight: 1
-  - endpointIP: "10.0.1.11"
-    targetPort: 8080
-    weight: 1
-  - endpointIP: "10.0.1.12"
-    targetPort: 8080
-    weight: 1
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "sel": 9,
+      "backend_protocol": "http1"
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.1.10", "targetPort": 8080, "weight": 1},
+      {"endpointIP": "10.0.1.11", "targetPort": 8080, "weight": 1},
+      {"endpointIP": "10.0.1.12", "targetPort": 8080, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
 ```
+
+### Configuration Options
+
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `sel` | int | `8`, `9`, `10` | `8` | Endpoint selection algorithm. `9` = GPU-aware (uses vLLM metrics) |
+| `mode` | int | `4` | - | Must be `4` (FullProxy) for AI Gateway features |
+| `backend_protocol` | string | `http1` | - | Must be `http1` for AI Gateway |
 
 **vLLM side requirement:** Start vLLM with the `--enable-metrics` flag to expose the `/metrics` HTTP endpoint:
 
@@ -78,6 +87,27 @@ python -m vllm.entrypoints.openai.api_server \
   --enable-metrics \
   --port 8080
 ```
+
+## Verify
+
+Confirm GPU-aware load balancing is active:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/gpu/status \
+  -H "Authorization: Bearer <token>"
+
+# Expected response:
+# {"gpu_aware_enabled": true, "active_scrapers": 3}
+```
+
+You can also verify the service rule has the correct `sel` value:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>"
+```
+
+Check that your service shows `sel: 9` in the response.
 
 ## Troubleshooting
 
@@ -116,3 +146,4 @@ python -m vllm.entrypoints.openai.api_server \
 - [KV Caching](kv-caching.md) — KV-exact routing configuration (Tier 1.5)
 - [Model Load Balancing](model-load-balancing.md) — Per-model endpoint pools
 - [Configuration Reference](configuration-reference.md) — All AI Gateway config fields
+- [GPU and LLM Catalog API Reference](../reference/api.md#ai-gateway-gpu-and-llm-catalog)

@@ -10,8 +10,6 @@ When running multiple LLM models — for example, a large 70B parameter model fo
 
 loxilb's AI Gateway solves this with **model-name routing**: the `model_name` field in the LB service configuration creates **per-model endpoint pools**. Multiple LB rules on the same VIP and port can differ only in `model_name`, each pointing to a different set of backend endpoints.
 
-(Source: common/common.go:858)
-
 ## How Model Selection Works
 
 When a request arrives at the AI Gateway, loxilb determines the target model in this priority order:
@@ -22,66 +20,86 @@ When a request arrives at the AI Gateway, loxilb determines the target model in 
 
 This means clients can use the standard OpenAI API format (`"model": "meta-llama/Llama-3-70B"` in the request body) and loxilb automatically routes to the correct GPU pool.
 
-## Configuration
+## REST API Config
 
-Here is a multi-model configuration with two LB rules on the same VIP, each routing to different GPU tiers:
+Configure multi-model routing by creating multiple LB rules on the same VIP via `POST /config/services`, each with a different `model_name`:
 
-```yaml
-# Rule 1: Llama-3-70B on high-memory GPUs (A100-80GB)
-# Source: common/common.go:855-860
-serviceArguments:
-  vip: "192.168.1.100"
-  port: 443
-  protocol: "tcp"
-  mode: 4                                    # LBModeFullProxy required
-  backend_protocol: "http1"
-  model_name: "meta-llama/Llama-3-70B"       # Source: common/common.go:858
-  sel: 8                                     # CHWBL for conversational cache locality
-  llm_type: "chat-interactive"
-endpoints:
-  - endpointIP: "10.0.1.10"                 # A100-80GB pool
-    targetPort: 8080
-    weight: 1
-  - endpointIP: "10.0.1.11"
-    targetPort: 8080
-    weight: 1
+### Rule 1: Llama-3-70B on high-memory GPUs (A100-80GB)
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "backend_protocol": "http1",
+      "model_name": "meta-llama/Llama-3-70B",
+      "sel": 8,
+      "llm_type": "chat-interactive"
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.1.10", "targetPort": 8080, "weight": 1},
+      {"endpointIP": "10.0.1.11", "targetPort": 8080, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
 ```
 
-```yaml
-# Rule 2: Llama-3-8B on smaller GPUs (L4)
-# Source: common/common.go:855-860
-serviceArguments:
-  vip: "192.168.1.100"
-  port: 443
-  protocol: "tcp"
-  mode: 4
-  backend_protocol: "http1"
-  model_name: "meta-llama/Llama-3-8B"       # Source: common/common.go:858
-  sel: 9                                     # GPU-aware for batch queries
-  llm_type: "chat-interactive"
-endpoints:
-  - endpointIP: "10.0.2.10"                 # L4 pool
-    targetPort: 8080
-    weight: 1
-  - endpointIP: "10.0.2.11"
-    targetPort: 8080
-    weight: 1
+### Rule 2: Llama-3-8B on smaller GPUs (L4)
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "backend_protocol": "http1",
+      "model_name": "meta-llama/Llama-3-8B",
+      "sel": 9,
+      "llm_type": "chat-interactive"
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.2.10", "targetPort": 8080, "weight": 1},
+      {"endpointIP": "10.0.2.11", "targetPort": 8080, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
 ```
 
-```yaml
-# Rule 3: Wildcard fallback (catches unmatched models)
-serviceArguments:
-  vip: "192.168.1.100"
-  port: 443
-  protocol: "tcp"
-  mode: 4
-  backend_protocol: "http1"
-  # No model_name — wildcard pool
-  sel: 8
-endpoints:
-  - endpointIP: "10.0.3.10"                 # General-purpose pool
-    targetPort: 8080
-    weight: 1
+### Rule 3: Wildcard fallback (catches unmatched models)
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "backend_protocol": "http1",
+      "sel": 8
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.3.10", "targetPort": 8080, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
 ```
 
 With this configuration, a client sends:
@@ -106,7 +124,44 @@ The `llm_type` field selects a **GPU routing catalog profile** that tunes routin
 
 The catalog profile list is defined in `pkg/loxinet/catalog.go`. See [Configuration Reference](configuration-reference.md) for available profiles.
 
-(Source: common/common.go:858)
+## Configuration Reference
+
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `model_name` | string | Any model identifier | (none) | Model name for per-model endpoint pools. Omit for wildcard pool |
+| `sel` | int | `8`, `9`, `10` | `8` | Endpoint selection algorithm |
+| `llm_type` | string | `chat-interactive`, `rag-longcontext` | - | GPU routing catalog profile |
+| `mode` | int | `4` | - | Must be `4` (FullProxy) for AI Gateway features |
+| `backend_protocol` | string | `http1` | - | Must be `http1` for AI Gateway |
+
+## Verify
+
+Confirm model routing rules are configured by listing services:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>"
+```
+
+The response should show multiple rules on the same VIP with different `model_name` values. Verify that the `sel` values match your intended routing strategy for each model.
+
+## Troubleshooting
+
+**Requests routed to wrong model pool**
+
+- Check `model_name` spelling in each service rule matches exactly what clients send in the `"model"` field
+- Verify rule priority: `X-Model` header takes precedence over JSON body `"model"` field
+- If no model-specific rule matches, requests fall to the wildcard pool (no `model_name` set)
+
+**Model not found (404 from backend)**
+
+- Confirm the backend vLLM instances are serving the expected model
+- Verify `targetPort` matches the vLLM serving port on each endpoint
+
+**Uneven load between model pools**
+
+- Check endpoint health: unhealthy endpoints are excluded from selection
+- For GPU-aware mode (`sel: 9`), verify the vLLM scraper is collecting metrics from all endpoints
 
 ## See Also
 
@@ -114,3 +169,4 @@ The catalog profile list is defined in `pkg/loxinet/catalog.go`. See [Configurat
 - [KV Caching](kv-caching.md) — KV cache-aware routing for conversational workloads
 - [vLLM Integration](vllm-integration.md) — GPU metrics for load-aware selection
 - [Configuration Reference](configuration-reference.md) — All AI Gateway config fields
+- [GPU and LLM Catalog API Reference](../reference/api.md#ai-gateway-gpu-and-llm-catalog)

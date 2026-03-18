@@ -42,7 +42,6 @@ The ZMQ subscriber (`ai_kv_subscriber.go`) connects to each vLLM instance's ZMQ 
 - Default port: 5557 (configurable via `kvZmqPort`)
 - Connection: one subscriber per vLLM endpoint
 
-(Source: ai_kv_subscriber.go)
 
 ### Tokenizer
 
@@ -50,41 +49,51 @@ When a request arrives, loxilb tokenizes the prompt — converting text to token
 
 The tokenizer is loaded from a staged file on the loxilb host. See [Tokenizer Staging](#tokenizer-staging) below.
 
-(Source: ai_kv_router.go:116)
 
 ### LRU Cache
 
 A **4096-entry LRU cache** keyed by `(model-slug, first 512 chars of prompt)` avoids re-tokenizing identical or similar prompts. This is particularly effective when many requests share the same system prompt — the tokenization result is cached and reused.
 
-(Source: ai_kv_router.go)
 
 ### Block Matching
 
 The hashed blocks from the incoming prompt are compared against each endpoint's block inventory. The endpoint with the **highest cache hit count** is selected — the GPU that already has the most relevant KV cache blocks for this prompt in its VRAM.
 
-## Configuration
+## REST API Config
 
-```yaml
-# KV Cache Routing — Minimal Config
-# Source: common/common.go:898-910
-serviceArguments:
-  vip: "192.168.1.100"
-  port: 443
-  protocol: "tcp"
-  mode: 4                   # LBModeFullProxy required
-  sel: 8                    # LbSelCHWBL (Source: common/common.go:694)
-  llm_type: "chat-interactive"
-  kvExactMode: 1            # 0=off, 1=zmq (Source: common/common.go:899)
-  kvBlockSize: 16           # token block size (Source: common/common.go:901)
-  kvHashAlgo: "sha256_cbor" # or "xxhash_cbor" (Source: common/common.go:903)
-  kvZmqPort: 5557           # ZMQ PUB port on vLLM instances (Source: common/common.go:904)
-  kvWarmupSec: 30           # seconds before Tier 1.5 activates (Source: common/common.go:906)
+Configure KV cache-aware routing via `POST /config/services` with the KV-specific `serviceArguments` fields:
+
+```bash
+curl -X POST http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "192.168.1.100",
+      "port": 443,
+      "protocol": "tcp",
+      "mode": 4,
+      "sel": 8,
+      "backend_protocol": "http1",
+      "llm_type": "chat-interactive",
+      "kvExactMode": 1,
+      "kvBlockSize": 16,
+      "kvHashAlgo": "sha256_cbor",
+      "kvZmqPort": 5557,
+      "kvWarmupSec": 30
+    },
+    "endpoints": [
+      {"endpointIP": "10.0.1.1", "targetPort": 8080, "weight": 1},
+      {"endpointIP": "10.0.1.2", "targetPort": 8080, "weight": 1}
+    ]
+  }'
+
+# Response (200):
+# {"result": "Success"}
 ```
 
 !!! warning "Required: FullProxy Mode"
     KV cache routing requires `mode: 4` (LBModeFullProxy) and `backend_protocol: "http1"`. Other LB modes cannot inspect HTTP bodies for prompt content.
-
-    Source: common/common.go:885
 
 ## Tokenizer Staging
 
@@ -113,17 +122,31 @@ wget -O /etc/loxilb/tokenizers/meta-llama__Llama-3-8B/tokenizer.json \
   https://huggingface.co/meta-llama/Llama-3-8B/raw/main/tokenizer.json
 ```
 
-(Source: ai_kv_router.go:116)
 
 ## Configuration Reference
 
-| Field | Type | Default | Description | Source |
-|-------|------|---------|-------------|--------|
-| `kvExactMode` | int | `0` | KV-exact routing mode. `0`=off, `1`=zmq subscriber mode | common/common.go:899 |
-| `kvBlockSize` | int | `16` | Number of tokens per block for hashing | common/common.go:901 |
-| `kvHashAlgo` | string | `"sha256_cbor"` | Hash algorithm. Options: `sha256_cbor`, `xxhash_cbor` | common/common.go:903 |
-| `kvZmqPort` | int | `5557` | ZMQ PUB socket port on each vLLM instance | common/common.go:904 |
-| `kvWarmupSec` | int | `30` | Seconds to wait before activating Tier 1.5 (allows block inventory to populate) | common/common.go:906 |
+| Field | Type | Valid Values | Default | Description |
+|-------|------|-------------|---------|-------------|
+| `kvExactMode` | int | `0`, `1` | `0` | KV-exact routing mode. `0`=off, `1`=zmq subscriber mode |
+| `kvBlockSize` | int | > 0 | `16` | Number of tokens per block for hashing |
+| `kvHashAlgo` | string | `sha256_cbor`, `xxhash_cbor` | `"sha256_cbor"` | Hash algorithm for token block hashing |
+| `kvZmqPort` | int | 1–65535 | `5557` | ZMQ PUB socket port on each vLLM instance |
+| `kvWarmupSec` | int | >= 0 | `30` | Seconds to wait before activating Tier 1.5 (allows block inventory to populate) |
+
+## Verify
+
+Confirm KV cache routing is configured by listing your service rules:
+
+```bash
+curl http://loxilb:11111/netlox/v1/config/services \
+  -H "Authorization: Bearer <token>"
+```
+
+Check that the response includes your service rule with `kvExactMode: 1` and the expected KV fields. Also look for the following log line confirming the block inventory is active:
+
+```
+kv-router: block inventory populated, N endpoints active
+```
 
 ## Troubleshooting
 
@@ -154,3 +177,4 @@ wget -O /etc/loxilb/tokenizers/meta-llama__Llama-3-8B/tokenizer.json \
 - [vLLM Integration](vllm-integration.md) — GPU metrics scraping (Tier 2)
 - [AWS KV Cache Deployment](aws-kv-cache.md) — Deploying KV routing on AWS EKS
 - [Configuration Reference](configuration-reference.md) — All AI Gateway config fields
+- [GPU and LLM Catalog API Reference](../reference/api.md#ai-gateway-gpu-and-llm-catalog)
