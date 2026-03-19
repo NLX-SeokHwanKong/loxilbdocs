@@ -37,6 +37,29 @@ sudo cp -fr /usr/local/build/lib/* /usr/lib/
 sudo ldconfig   
 rm -fr openssl-3.3.1*   
 ```
+
+* Install ngtcp2
+```
+git clone https://github.com/ngtcp2/ngtcp2.git
+cd ngtcp2
+autoreconf -fi
+./configure --prefix=/usr/local/build --enable-lib-only
+make -j$(nproc)
+sudo make install
+cd ..
+```
+
+* Install nghttp3
+```
+git clone https://github.com/ngtcp2/nghttp3.git
+cd nghttp3
+autoreconf -fi
+./configure --prefix=/usr/local/build --enable-lib-only
+make -j$(nproc)
+sudo make install
+cd ..
+```
+
 * Build and run loxilb 
 ```
 git clone --recurse-submodules https://github.com/loxilb-io/loxilb.git

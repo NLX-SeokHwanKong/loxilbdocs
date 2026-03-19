@@ -23,10 +23,8 @@ You will deploy loxilb-enterprise as a gateway, create a load balancer rule to d
 docker run -d --privileged --name loxilb-enterprise \
   -v /dev/log:/dev/log \
   --net=host \
-  ghcr.io/loxilb-io/loxilb-enterprise:latest
+  ghcr.io/netlox-dev/loxilb-enterprise:latest
 ```
-
-<!-- TODO: Confirm enterprise container registry path -->
 
 Wait a few seconds for the eBPF dataplane to initialize, then verify:
 

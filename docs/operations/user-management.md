@@ -107,7 +107,7 @@ loxilb --oauth2 --oauth2provider=github
 # docker-compose.yml
 services:
   loxilb:
-    image: ghcr.io/loxilb-io/loxilb-enterprise:latest
+    image: ghcr.io/netlox-dev/loxilb-enterprise:latest
     command: --oauth2 --oauth2provider=google
     volumes:
       - loxilb-data:/opt/loxilb

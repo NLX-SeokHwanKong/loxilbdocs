@@ -1,87 +1,150 @@
-# loxilb-enterprise: Unified Gateway Platform
+# loxilb: eBPF-Powered Gateway for Cloud-Native Infrastructure
 
-loxilb-enterprise is a high-performance unified gateway built on an eBPF dataplane. It delivers three enterprise capability pillars — **AI Gateway**, **Security Gateway**, and **Network Gateway** — in a single binary designed for Kubernetes and edge environments.
+**loxilb** is an open-source, eBPF-based cloud-native load balancer and gateway purpose-built for Kubernetes and edge environments. It delivers carrier-grade performance without dedicated CPU cores — and scales from a single cluster to multi-cloud, multi-region deployments.
 
-[Get Started in 10 Minutes](getting-started/quickstart.md){ .md-button .md-button--primary }
-[Understand the Platform](concepts/unified-gateway.md){ .md-button }
+For AI workloads and production-grade security, **loxilb-enterprise** extends the open-source core with an [AI Gateway](#ai-gateway-the-enterprise-differentiator), advanced Security Gateway, and enterprise capabilities. **Both editions are free to download and use** — commercial support licensing is available when you need it.
+
+[Try loxilb (Open Source)](k3s_quick_start_flannel.md){ .md-button .md-button--primary }
+[Try loxilb-enterprise (Free)](getting-started/quickstart.md){ .md-button }
+
+Want production SLAs or dedicated engineering support? [Contact NetLOX](https://netlox.io/business/contact).
 
 ---
 
-## Three Gateway Pillars
+## Open Source vs. Enterprise
 
 <div class="grid cards" markdown>
 
--   :material-brain:{ .lg .middle } **AI Gateway**
+-   :material-open-source-initiative:{ .lg .middle } **loxilb — Open Source**
 
     ---
 
-    Route LLM traffic with KV cache-aware load balancing, vLLM integration, model load balancing, and PD disaggregation — all accelerated by eBPF.
+    The full-featured eBPF load balancer, freely available on GitHub. Production-ready for Kubernetes L4/L7 load balancing, multi-cloud HA, and edge deployments.
 
-    [:octicons-arrow-right-24: AI Gateway Overview](ai-gateway/overview.md)
+    **What's included:**
 
--   :material-shield-lock:{ .lg .middle } **Security Gateway**
+    - eBPF-accelerated L4 load balancing & NAT
+    - Kubernetes Service `type: LoadBalancer` via kube-loxilb
+    - BGP, ECMP, DSR, NAT64, GTP, SCTP multi-homing
+    - In-cluster & external-to-cluster deployment modes
+    - Supports any CNI: Calico, Flannel, Cilium, Multus
+
+    [:octicons-arrow-right-24: Quick Start (k3s + Flannel)](k3s_quick_start_flannel.md)
+    [:octicons-arrow-right-24: Architecture](arch.md)
+
+-   :material-crown:{ .lg .middle } **loxilb-enterprise — Free to Use**
 
     ---
 
-    Enforce OPA policies, detect PII with Presidio, filter AI content with LlamaFirewall, rate-limit per endpoint, and secure the dataplane with IPsec and mTLS.
+    Everything in loxilb open source, plus the **AI Gateway**, enhanced Security Gateway, and enterprise operations features. **Free to download and run** — optional paid support when you need SLAs.
 
-    [:octicons-arrow-right-24: Security Gateway Overview](security-gateway/overview.md)
+    **What's added:**
 
--   :material-server-network:{ .lg .middle } **Network Gateway**
+    - :material-brain: **AI Gateway** — KV cache-aware LLM routing, vLLM integration, PD disaggregation
+    - :material-shield-lock: **Security Gateway** — OPA policies, PII detection, LlamaFirewall, mTLS
+    - :material-server-network: **Network Gateway** — HTTPS/HTTP2 proxy, advanced egress LB
+    - Enterprise RBAC, audit logging, and SLA-backed support
 
-    ---
-
-    High-performance L4 data plane with egress load balancing, direct server return, NAT64, HTTPS/HTTP2 proxy modes, and SCTP multi-homing.
-
-    [:octicons-arrow-right-24: Network Gateway Overview](network-gateway/overview.md)
+    [:octicons-arrow-right-24: Enterprise Quick Start](getting-started/quickstart.md)
+    [:octicons-arrow-right-24: Migration from Open Source](getting-started/migration-from-community.md)
 
 </div>
 
 ---
 
-## Why loxilb-enterprise?
+## AI Gateway — The Enterprise Differentiator
 
-- **eBPF-accelerated dataplane** — Packet processing in the kernel with no dedicated CPU cores required, delivering line-rate performance for gateway operations
-- **Single binary deployment** — All three gateway pillars, control plane, and eBPF dataplane ship as one binary with no external dependencies
-- **Kubernetes-native** — Runs as in-cluster or external-to-cluster with kube-loxilb, supporting any CNI (Calico, Flannel, Cilium, Multus)
-- **Enterprise security built-in** — OPA policy enforcement, PII detection, AI content safety, IPsec, mTLS, and RBAC-based user management
-
----
-
-## Quick Links
+loxilb-enterprise includes the only eBPF-accelerated AI Gateway designed for production LLM inference infrastructure.
 
 <div class="grid cards" markdown>
 
--   **Getting Started**
+-   :material-memory:{ .lg .middle } **KV Cache-Aware Load Balancing**
 
     ---
 
-    Install the enterprise binary and complete the 10-minute quickstart.
+    Route inference requests to the GPU node that already holds the KV cache for a given prefix — dramatically cutting time-to-first-token (TTFT).
 
-    [:octicons-arrow-right-24: Installation](getting-started/installation.md)
+    [:octicons-arrow-right-24: KV Caching](ai-gateway/kv-caching.md)
 
--   **API Reference**
+-   :material-swap-horizontal:{ .lg .middle } **Prefill / Decode Disaggregation**
 
     ---
 
-    Complete REST API documentation for enterprise endpoints.
+    Separate prefill and decode phases across different node pools to maximize GPU utilization and throughput for large-scale LLM serving.
+
+    [:octicons-arrow-right-24: PD Disaggregation](ai-gateway/pd-disaggregation.md)
+
+-   :material-scale-balance:{ .lg .middle } **Model Load Balancing**
+
+    ---
+
+    Distribute traffic across multiple model replicas or versions with session affinity, weighted routing, and health-aware failover.
+
+    [:octicons-arrow-right-24: Model Load Balancing](ai-gateway/model-load-balancing.md)
+
+-   :material-server:{ .lg .middle } **vLLM Integration**
+
+    ---
+
+    Native integration with vLLM serving engines — no sidecar required. Metric-aware routing based on queue depth and GPU memory pressure.
+
+    [:octicons-arrow-right-24: vLLM Integration](ai-gateway/vllm-integration.md)
+
+</div>
+
+---
+
+## Why loxilb?
+
+- **eBPF dataplane** — Kernel-level packet processing with no dedicated CPU cores; line-rate performance without sacrificing resource efficiency
+- **Single binary** — All gateways, control plane, and eBPF programs ship in one binary with zero external runtime dependencies
+- **Kubernetes-native** — Full `type: LoadBalancer` support via kube-loxilb on any distribution (k3s, k0s, EKS, OpenShift, microk8s)
+- **Cloud & edge ready** — Tested on AWS multi-AZ, multi-cloud HA, bare metal, and edge nodes
+- **Open-source foundation** — Core is MIT-licensed, community-driven, and production-proven
+
+---
+
+## Choose Your Path
+
+<div class="grid cards" markdown>
+
+-   **Start with Open Source**
+
+    ---
+
+    Run loxilb in minutes on k3s, k0s, or any Kubernetes cluster. Free forever, no registration required.
+
+    [:octicons-arrow-right-24: k3s + Flannel Quick Start](k3s_quick_start_flannel.md)
+    [:octicons-arrow-right-24: k3s + Calico Quick Start](k3s_quick_start_calico.md)
+    [:octicons-arrow-right-24: EKS Quick Start](eks-incluster.md)
+
+-   **Try Enterprise Features**
+
+    ---
+
+    Add the AI Gateway and enterprise security to an existing loxilb deployment or start fresh.
+
+    [:octicons-arrow-right-24: Enterprise Installation](getting-started/installation.md)
+    [:octicons-arrow-right-24: AI Gateway Overview](ai-gateway/overview.md)
+    [:octicons-arrow-right-24: Security Gateway Overview](security-gateway/overview.md)
+
+-   **API & Reference**
+
+    ---
+
+    REST API reference, CLI commands, and configuration options for both open source and enterprise.
 
     [:octicons-arrow-right-24: API Reference](reference/api.md)
+    [:octicons-arrow-right-24: CLI Reference](cmd.md)
+    [:octicons-arrow-right-24: Architecture](arch.md)
 
--   **Community**
-
-    ---
-
-    Contribute, report issues, or join the discussion.
-
-    [:octicons-arrow-right-24: Contributing](community/contributing.md)
-
--   **Migrating from Community**
+-   **Get Enterprise Support**
 
     ---
 
-    Upgrade from community loxilb with full backward compatibility.
+    Production SLAs, dedicated engineering support, and priority security patches — just like Red Hat for your gateway infrastructure.
 
-    [:octicons-arrow-right-24: Migration Guide](getting-started/migration-from-community.md)
+    [:octicons-arrow-right-24: Contact NetLOX](https://netlox.io/business/contact)
+    [:octicons-arrow-right-24: Community & Contributing](community/contributing.md)
 
 </div>

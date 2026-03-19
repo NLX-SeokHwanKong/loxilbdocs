@@ -49,52 +49,123 @@ nav:
       - Installation: getting-started/installation.md
       - Quick Start: getting-started/quickstart.md
       - Migrating from Community: getting-started/migration-from-community.md
+  - Load Balancer (Open Source):
+      - Core Concepts:
+          - What is External LB: lb.md
+          - LB Algorithms: lb-algo.md
+          - NAT Modes: nat.md
+          - What is eBPF: ebpf.md
+          - loxilb eBPF Internals: loxilbebpf.md
+          - Architecture: arch.md
+      - Kubernetes Integration:
+          - kube-loxilb Operator: kube-loxilb.md
+          - kube-loxilb URL CRDs: kube-loxilb-url-crds.md
+          - Cloud Controller Manager: ccm.md
+          - Gateway API: gw-api.md
+          - Ingress Controller: loxilb-ingress.md
+          - NGINX Ingress: loxilb-nginx-ingress.md
+          - Egress Gateway: loxilb-egress.md
+          - Service Sharding: service-sharding.md
+          - Service Zones: service-zones.md
+          - External Endpoints: ext-ep.md
+          - BGP Policy CRDs: k8s_bgp_policy_crd.md
+      - High Availability & BGP:
+          - HA Deployment: ha-deploy.md
+          - BGP with Calico: integrate_bgp_eng.md
+      - Features:
+          - HTTPS Guide: https.md
+          - OAuth2 Authentication: oauth2.md
+          - Token Authentication: token.md
+          - Proxy Protocol v2: proxy-protocol-v2.md
+          - GTP Testing: gtp.md
+      - Performance:
+          - Performance Overview: perf.md
+          - Single-Node Benchmarks: perf-single.md
+          - Multi-Node Benchmarks: perf-multi.md
+      - Monitoring:
+          - Grafana In-Cluster: loxilb-incluster-grafana.md
+          - Production Monitoring: loxilb-incluster-prod-monitoring.md
+          - Service Proxy (Calico): service-proxy-calico.md
+          - Service Proxy (Flannel): service-proxy-flannel.md
+      - Deployment Guides:
+          - EKS External Mode: eks-external.md
+          - EKS In-Cluster: eks-incluster.md
+          - K3s with Flannel: k3s_quick_start_flannel.md
+          - K3s with Calico: k3s_quick_start_calico.md
+          - K3s with Cilium: quick_start_with_cilium.md
+          - K3s In-Cluster: k3s_quick_start_incluster.md
+          - K3s Multi-Master: k3s-multi-master.md
+          - K3s with RabbitMQ: k3s-rmq.md
+          - K8s Flannel External: k8s-flannel-ext.md
+          - K8s Flannel In-Cluster: k8s-flannel-incluster.md
+          - K0s External Mode: k0s_quick_start.md
+          - K0s In-Cluster: k0s_quick_start_incluster.md
+          - MicroK8s In-Cluster: microk8s_quick_start_incluster.md
+          - K3K Virtual Cluster: k3k-virtual-cluster.md
+          - RedHat OCP: rhocp-quickstart-incluster.md
+          - Calico with Multus: calico-incluster-multus.md
+          - Cilium In-Cluster: cilium-incluster.md
+          - Multus In-Cluster: loxilb-incluster-multus.md
+          - Multi-AZ HA on AWS: aws-multi-az.md
+          - Multi-Cloud HA: multi-cloud-ha.md
+          - Standalone Mode: standalone.md
+      - Reference:
+          - CLI Reference: cmd.md
+          - CLI Reference (Dev): cmd-dev.md
+          - API Reference: api.md
+          - API Reference (Dev): api-dev.md
+          - System Requirements: requirements.md
+          - Source Code Guide: code.md
+      - Development:
+          - Building from Source: run.md
+          - Database Setup: db_setup.md
+          - Debugging: debugging.md
+          - Test Topology: simple_topo.md
   - AI Gateway:
-      - Overview: ai-gateway/overview.md
-      - LLM Routing: ai-gateway/llm-routing.md
-      - KV Caching: ai-gateway/kv-caching.md
-      - vLLM Integration: ai-gateway/vllm-integration.md
-      - Model Load Balancing: ai-gateway/model-load-balancing.md
-      - PD Disaggregation: ai-gateway/pd-disaggregation.md
-      - AWS KV Cache Deployment: ai-gateway/aws-kv-cache.md
-      - API Key Management: ai-gateway/api-key-management.md
-      - SSE Quota Management: ai-gateway/sse-quota-management.md
-      - Configuration Reference: ai-gateway/configuration-reference.md
-  - Security Gateway:
-      - Overview: security-gateway/overview.md
-      - OPA Policy Enforcement: security-gateway/opa-policy-enforcement.md
-      - PII Detection with Presidio: security-gateway/presidio-pii-detection.md
-      - LlamaFirewall: security-gateway/llamafirewall.md
-      - Rate Limiting: security-gateway/rate-limiting.md
-      - Secure Dataplane Overview: security-gateway/secure-dataplane.md
-      - IPsec: security-gateway/ipsec.md
-      - mTLS: security-gateway/mtls.md
-      - Deployment Scenarios: security-gateway/deployment-scenarios.md
-      - SYN Flood Protection: security-gateway/syn-flood.md
-      - IP Filtering: security-gateway/ip-filtering.md
-      - Configuration Reference: security-gateway/configuration-reference.md
-  - Network Gateway:
-      - Overview: network-gateway/overview.md
-      - Egress Load Balancing: network-gateway/egress-lb.md
-      - Direct Server Return: network-gateway/dsr.md
-      - NAT64: network-gateway/nat64.md
-      - HTTPS Proxy Modes: network-gateway/https-proxy.md
-      - HTTP/2 Proxy: network-gateway/http2-proxy.md
-      - SCTP Multi-homing: network-gateway/sctp-multihoming.md
+      - AI Gateway:
+          - Overview: ai-gateway/overview.md
+          - "AI Gateway: Routing & Access Control":              
+              - LLM Routing: ai-gateway/llm-routing.md
+              - MCP Routing: ai-gateway/mcp-gateway.md
+              - API Key Management: ai-gateway/api-key-management.md
+              - SSE Quota Management: ai-gateway/sse-quota-management.md
+              - Configuration Reference: ai-gateway/configuration-reference.md              
+          - "AI Gateway: GPU & vLLM Integration":
+              - vLLM Integration: ai-gateway/vllm-integration.md
+              - KV Cache Routing: ai-gateway/kv-caching.md
+              - Model Load Balancing: ai-gateway/model-load-balancing.md
+              - PD Disaggregation: ai-gateway/pd-disaggregation.md
+              - AWS KV Cache Deployment: ai-gateway/aws-kv-cache.md
+      - Security Gateway:
+          - Overview: security-gateway/overview.md
+          - "Security Gateway: Policy & Threat Protection":
+              - OPA Policy Enforcement: security-gateway/opa-policy-enforcement.md
+              - Rate Limiting: security-gateway/rate-limiting.md
+              - IP Filtering: security-gateway/ip-filtering.md
+              - SYN Flood Protection: security-gateway/syn-flood.md
+          - "Security Gateway: Secure Transport":
+              - Secure Dataplane Overview: security-gateway/secure-dataplane.md
+              - IPsec: security-gateway/ipsec.md
+              - mTLS: security-gateway/mtls.md
+          - "Security Gateway: AI & Content Safety":
+              - LlamaFirewall: security-gateway/llamafirewall.md
+              - PII Detection with Presidio: security-gateway/presidio-pii-detection.md
+          - "Security Gateway: Reference":
+              - Deployment Scenarios: security-gateway/deployment-scenarios.md
+              - Configuration Reference: security-gateway/configuration-reference.md
+      - Network Gateway:
+          - Overview: network-gateway/overview.md
+          - "Network Gateway: Load Balancing & Routing":
+              - Egress Load Balancing: network-gateway/egress-lb.md
+              - Direct Server Return: network-gateway/dsr.md
+              - NAT64: network-gateway/nat64.md
+          - "Network Gateway: Proxy & Protocol":
+              - HTTPS Proxy Modes: network-gateway/https-proxy.md
+              - HTTP/2 Proxy: network-gateway/http2-proxy.md
+              - SCTP Multi-homing: network-gateway/sctp-multihoming.md
   - Operations:
       - User Management: operations/user-management.md
       - Monitoring Setup: operations/monitoring.md
-  - Deployment Guides:
-      - EKS External Mode: eks-external.md
-      - EKS In-Cluster: eks-incluster.md
-      - K3s with Flannel: k3s_quick_start_flannel.md
-      - K3s with Calico: k3s_quick_start_calico.md
-      - K3s with Cilium: quick_start_with_cilium.md
-      - K8s In-Cluster: k8s-flannel-incluster.md
-      - Multi-AZ HA on AWS: aws-multi-az.md
-      - Multi-Cloud HA: multi-cloud-ha.md
-      - RedHat OCP: rhocp-quickstart-incluster.md
-      - Standalone Mode: standalone.md
   - Reference:
       - API Reference: reference/api.md
       - CLI Reference: reference/cli.md

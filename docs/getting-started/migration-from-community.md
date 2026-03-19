@@ -13,7 +13,7 @@ Existing community loxilb users can upgrade to loxilb-enterprise to access the A
 | Component | Community | Enterprise |
 |---|---|---|
 | Binary name | `loxilb` | `loxilb-enterprise` |
-| Container image | `ghcr.io/loxilb-io/loxilb` | `ghcr.io/loxilb-io/loxilb-enterprise` |
+| Container image | `ghcr.io/loxilb-io/loxilb` | `ghcr.io/netlox-dev/loxilb-enterprise` |
 | CLI tool | `loxicmd` | `loxicmd` (same) |
 | REST API base | `http://localhost:11111` | `http://localhost:11111` (same) |
 | Configuration format | YAML/CLI | YAML/CLI (same, with additional enterprise options) |
@@ -68,10 +68,8 @@ docker exec loxilb loxicmd get conntrack -o json > conntrack-backup.json
     docker run -d --privileged --name loxilb-enterprise \
       -v /dev/log:/dev/log \
       --net=host \
-      ghcr.io/loxilb-io/loxilb-enterprise:latest
+      ghcr.io/netlox-dev/loxilb-enterprise:latest
     ```
-
-    <!-- TODO: Confirm enterprise container registry path -->
 
 === "Kubernetes"
 
@@ -82,7 +80,7 @@ docker exec loxilb loxicmd get conntrack -o json > conntrack-backup.json
     image: ghcr.io/loxilb-io/loxilb:latest
 
     # After (enterprise)
-    image: ghcr.io/loxilb-io/loxilb-enterprise:latest
+    image: ghcr.io/netlox-dev/loxilb-enterprise:latest
     ```
 
     Apply the updated manifest:

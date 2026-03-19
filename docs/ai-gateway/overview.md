@@ -1,162 +1,171 @@
 # AI Gateway Overview
 
 !!! enterprise "Enterprise Feature"
-    This feature requires loxilb-enterprise. It is not available in the community edition.
-    See [Installation](../getting-started/installation.md) for enterprise binary setup.
+    The AI Gateway is included in loxilb-enterprise, which is **free to download and use**.
+    See [Installation](../getting-started/installation.md) to get started.
 
 ## What is the AI Gateway?
 
-You know how a load balancer distributes HTTP traffic across web servers. An AI Gateway does the same for Large Language Model (LLM) inference traffic — but with awareness of GPU memory state, model placement, and streaming response patterns that standard L4/L7 load balancers cannot handle.
+A standard load balancer routes HTTP requests to the least-busy server. That works well for web traffic — but LLM inference is fundamentally different.
 
-The core problem is that LLM inference is **stateful**, not stateless like web traffic. When a GPU processes a prompt, it builds a **KV cache** (key-value attention matrices) in its VRAM — essentially a memory of the conversation context. If the next request in that conversation lands on a different GPU, that GPU must rebuild the entire KV cache from scratch. This causes a **3-5x latency increase** on every cache miss, turning a sub-second response into a multi-second wait.
+When a GPU processes a prompt, it builds a **KV cache** in its memory — a record of the conversation context it computed. If the next request in that conversation lands on a *different* GPU, that GPU must rebuild the entire KV cache from scratch. This cold-start penalty causes a **3–5× latency increase** on every miss, turning a sub-second response into a multi-second wait.
 
-loxilb's AI Gateway solves this with **eBPF-accelerated L7 proxy routing** (FullProxy mode) that is KV cache-aware. Instead of blindly round-robining requests across GPUs, loxilb routes each prompt to the GPU that already holds the relevant KV cache blocks — preserving cache locality while maintaining load balance across the GPU fleet.
+**loxilb's AI Gateway** is designed specifically for this problem. It acts as a high-performance L7 proxy in front of your LLM backends, routing each request with awareness of GPU memory state, model placement, and streaming response patterns — so you get both cache efficiency and load balance across your GPU fleet.
 
-## Why eBPF for AI Traffic?
+All inspection and enforcement (API key validation, rate limiting, security scanning) happens **before** traffic reaches the backend LLM, at the network layer.
 
-Networking engineers are familiar with eBPF for high-performance packet processing. loxilb applies the same principle to AI traffic:
+---
 
-- **eBPF TC hook** handles L4 fast-path operations: connection tracking (conntrack) and NAT map lookups. This is the same eBPF acceleration used for standard load balancing.
+## Features at a Glance
 
-- **sockproxy.c** (C user-space) performs L7 HTTP body parsing. It extracts the model name, API key, and prompt content from incoming `/v1/chat/completions` requests using the jsmn JSON parser — all in C for minimal overhead.
+AI Gateway features fall into two categories depending on whether they require a vLLM backend.
 
-- **CGO bridge pattern**: The C hot-path calls Go logic for enforcement decisions (API key validation, rate limiting, AI security scanning). This keeps enforcement at data-plane speed while business logic stays in testable Go code. Each bridge function follows the same pattern: C sockproxy calls `//export llb_ai_*()` in Go, Go runs pure logic, returns a `C.int` decision.
+### Works with Any LLM Backend
 
-This architecture means that API key validation, rate limiting, and security scanning all happen **before** traffic reaches the backend LLM — at data-plane speed, not application-layer speed.
+These features are available regardless of your inference framework and can be enabled independently:
 
+| Feature | What it does |
+|---|---|
+| [API Key Management](api-key-management.md) | Issue and revoke per-tenant API keys; validate keys before requests hit backends |
+| [Rate Limiting](sse-quota-management.md) | Per-tenant request and token-rate limits enforced at the data plane |
+| [Model-Based Routing](llm-routing.md) | Route requests to different backend pools based on the requested model name |
+| [SSE Streaming & Token Quota](sse-quota-management.md) | Full support for streaming responses; count consumed tokens per tenant |
+| [AI Security — LlamaFirewall](../security-gateway/llamafirewall.md) | Inline prompt inspection for prompt injection and jailbreak attempts |
+| [AI Security — PII Detection](../security-gateway/presidio-pii-detection.md) | Detect and block credential leakage or personal data in prompts |
 
-## Key Capabilities
+### Requires vLLM
 
-The AI Gateway provides the following enterprise features, each documented on its own page:
+These features depend on real-time GPU metrics scraped from [vLLM](https://github.com/vllm-project/vllm) instances. A vLLM serving endpoint must be reachable for each backend:
 
-- **KV Cache-Aware Routing** — Route requests to the GPU that already has the relevant KV cache blocks, eliminating cold-start latency penalties. See [KV Caching](kv-caching.md).
+| Feature | What it does |
+|---|---|
+| [KV Cache-Aware Routing](kv-caching.md) | Route each request to the GPU that already holds the relevant KV cache, minimising time-to-first-token |
+| [GPU-Aware Load Balancing](vllm-integration.md) | Select backends based on live GPU queue depth and memory pressure from vLLM metrics |
+| [Model Load Balancing](model-load-balancing.md) | Distribute across model replicas with health-aware failover and weighted routing |
+| [PD Disaggregation](pd-disaggregation.md) | Split prefill (compute-intensive) and decode (memory-intensive) phases onto separate GPU pools for higher throughput |
 
-- **vLLM Integration & GPU-Aware Load Balancing** — Scrape real-time GPU metrics (queue depth, cache usage) from vLLM instances for intelligent endpoint selection. See [vLLM Integration](vllm-integration.md) and [Model Load Balancing](model-load-balancing.md).
+---
 
-- **API Key Management & Rate Limiting** — Per-key and per-tenant rate limiting enforced at the data plane. Keys are validated before traffic reaches backends. See [API Key Management](api-key-management.md).
+## How It Works
 
-- **AI Security (LlamaFirewall + Presidio)** — Inline prompt inspection for injection attacks, credential leakage, and PII detection. See [LlamaFirewall](../security-gateway/llamafirewall.md) and [PII Detection with Presidio](../security-gateway/presidio-pii-detection.md).
-
-- **SSE Streaming & Token Quota** — Server-Sent Events support with per-tenant token quota management for streaming LLM responses. See [SSE Quota Management](sse-quota-management.md).
-
-- **PD Disaggregation** — Separate prefill (compute-bound) and decode (memory-bound) phases onto different GPU pools for 2-3x throughput improvement. See [PD Disaggregation](pd-disaggregation.md).
-
-## Traffic Flow Overview
-
-The following diagram shows the complete request path through the AI Gateway:
+The AI Gateway operates as a **full L7 proxy** sitting in front of your LLM backends. Incoming requests are inspected at the application layer — not just at the TCP/IP level — so the gateway can read the model name, API key, and prompt content before making a routing decision.
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant eBPF as eBPF TC Hook
-    participant Sock as sockproxy.c (L7)
-    participant Go as Go Logic (CGO)
-    participant LF as LlamaFirewall (gRPC)
-    participant vLLM as Backend vLLM
+    participant GW as AI Gateway (loxilb-enterprise)
+    participant Sec as Security Checks
+    participant LLM as LLM Backend (vLLM or other)
 
-    Client->>eBPF: POST /v1/chat/completions → VIP:443
-    eBPF->>Sock: L4 conntrack → forward to sockproxy
-    Sock->>Go: Extract X-API-Key → llb_ai_validate_key()
-    Go-->>Sock: allow / 401 / 403
-    Sock->>Go: llb_ai_ratelimit_check()
-    Go-->>Sock: allow / 429 + retry_after
-    opt LlamaFirewall enabled
-        Sock->>LF: llb_llamafirewall_scan() (gRPC)
-        LF-->>Sock: allow / block / HITL
+    Client->>GW: POST /v1/chat/completions
+    GW->>GW: Validate API key → 401 if invalid
+    GW->>GW: Check rate limit → 429 if exceeded
+    opt Security scanning enabled
+        GW->>Sec: Inspect prompt (LlamaFirewall / Presidio)
+        Sec-->>GW: Allow or block
     end
-    Sock->>Sock: Endpoint selection (KV-exact → GPU-aware → fallback)
-    Sock->>vLLM: Forward request
-    vLLM-->>Client: SSE stream (data: tokens...)
-    Note over Sock,Go: On stream completion → llb_ai_token_quota_consume()
+    GW->>GW: Select backend (KV cache match → GPU-aware → weighted round-robin)
+    GW->>LLM: Forward request
+    LLM-->>Client: Streaming response (SSE)
+    GW->>GW: Count tokens consumed for quota
 ```
 
+---
+
+## Choosing a Routing Strategy
+
+When deploying the AI Gateway, select a routing strategy based on your workload:
+
+| Strategy | Best for | Requires vLLM |
+|---|---|:---:|
+| **KV Cache Routing** — Send conversations to the GPU that already processed earlier turns in the same session | Chatbots, multi-turn assistants, any workload where requests share context | Yes |
+| **GPU-Aware Routing** — Route to the least-loaded GPU based on live queue depth and memory usage | Batch jobs, single-turn completions, high-throughput pipelines | Yes |
+| **Model-Based Routing** — Route to different backend pools by model name | Serving multiple models behind one endpoint | No |
+| **Weighted Routing** — Distribute across backends with configurable weights | A/B testing, canary deployments, migrating between model versions | No |
+
+You can combine strategies. For example: use model-based routing to separate `gpt-4o` and `llama-3` pools, then apply KV cache routing within each pool.
+
+See [LLM Routing](llm-routing.md) for a complete guide to the three-tier routing architecture.
+
+---
 
 ## Prerequisites
 
-Before configuring any AI Gateway feature, ensure the following:
+!!! warning "L7 Proxy Mode Required"
+    All AI Gateway features require the load balancer service to run in **FullProxy mode**. Other modes operate at L4 only and cannot inspect HTTP request bodies for model routing, API key validation, or cache matching. See [Configuration Reference](configuration-reference.md) for how to enable this.
 
-!!! warning "Required: FullProxy Mode"
-    All AI Gateway features require `mode: 4` (LBModeFullProxy) and `backend_protocol: "http1"`. Other LB modes perform L4 load balancing only and cannot inspect HTTP bodies for model routing, API key validation, or KV cache matching.
+- **loxilb-enterprise** — Free to download. See [Installation](../getting-started/installation.md).
+- **HTTP/1.1 backends** — HTTP/2 is not supported for AI Gateway features.
+- **vLLM endpoints** (for GPU-aware and KV cache features) — Each backend must expose vLLM metrics; the gateway scrapes these automatically once configured.
 
-- **loxilb-enterprise binary** — The AI Gateway is an enterprise-only feature. See [Installation](../getting-started/installation.md) for setup instructions.
-- **FullProxy mode** — Set `mode: 4` on your LB service. This enables L7 proxy mode with HTTP body inspection, unlike L4 DNAT modes.
-- **HTTP/1 backend protocol** — Set `backend_protocol: "http1"` for all AI Gateway services. HTTP/2 is not supported for AI Gateway features.
+---
 
-## LB Selection Modes for LLM Workloads
+## Verify the Gateway is Running
 
-loxilb provides three load balancing selection modes optimized for LLM traffic. Choose based on your workload pattern:
-
-| Mode | `sel` Value | Name | Use Case |
-|------|-------------|------|----------|
-| Consistent Hash with Bounded Loads | `8` | LbSelCHWBL | **Default for KV cache routing.** Routes based on consistent hash, preserving KV cache locality. Best for conversational workloads where cache reuse matters. |
-| GPU-Aware | `9` | LbSelGPUAware | Uses real-time GPU queue depth and cache usage metrics from vLLM. Best for batch/independent queries where throughput matters more than cache locality. |
-| Weighted Round-Robin with Hash | `10` | LbSelWRRHash | Combines weighted round-robin with hash-based distribution. For mixed workloads or when transitioning from standard LB. |
-
-
-## REST API Config
-
-The AI Gateway is configured through the loxilb REST API. Three main endpoint groups cover all AI Gateway operations:
-
-- **API Key Management** (`/config/ai/apikey`) — Create, list, and revoke API keys for tenant access control. See [API Key Management](api-key-management.md) for full examples.
-- **Tenant Rate Limits** (`/config/ai/tenant/ratelimit`) — Set per-tenant request and token rate limits. See [SSE Quota Management](sse-quota-management.md) for full examples.
-- **GPU and LLM Catalog** (`/config/gpu/*`, `/config/llm-catalogs`) — Enable GPU-aware load balancing, query GPU status, and manage LLM catalog profiles. See [vLLM Integration](vllm-integration.md) and [Model Load Balancing](model-load-balancing.md) for configuration.
-
-AI Gateway features are activated on LB service rules created via `POST /config/services` with `mode: 4` (FullProxy) and feature-specific `serviceArguments`. Each feature page documents the exact JSON body.
-
-To check AI Gateway status, query the GPU feature endpoint:
-
-```bash
-curl http://loxilb:11111/netlox/v1/config/gpu/status \
-  -H "Authorization: Bearer <token>"
-
-# Response (200):
-# {"gpu_aware_enabled": true, "active_scrapers": 3}
-```
-
-## Verify
-
-Confirm the AI Gateway is operational by listing configured services:
+After setup, confirm AI Gateway services are active:
 
 ```bash
 curl http://loxilb:11111/netlox/v1/config/services \
   -H "Authorization: Bearer <token>"
 ```
 
-The response should include your AI Gateway service rules with `mode: 4` and the relevant `serviceArguments` fields. You can also verify GPU-aware mode:
+If you have vLLM integration enabled, check that GPU metrics are being collected:
 
 ```bash
 curl http://loxilb:11111/netlox/v1/config/gpu/status \
   -H "Authorization: Bearer <token>"
-
-# Expected: {"gpu_aware_enabled": true, "active_scrapers": N}
 ```
+
+Expected response when GPU-aware mode is active:
+```json
+{"gpu_aware_enabled": true, "active_scrapers": 3}
+```
+
+---
 
 ## Troubleshooting
 
-**Gateway not responding to API requests**
+**Gateway not responding**
 
-- Confirm the loxilb-enterprise service is running: `systemctl status loxilb`
-- Check that the API port (default 11111) is reachable: `curl http://loxilb:11111/netlox/v1/config/services`
-- Verify FullProxy mode is set (`mode: 4`) on your LB service rule
+- Confirm loxilb-enterprise is running and the API port (default `11111`) is reachable
+- Verify FullProxy mode is enabled on your load balancer service rule
 
-**API key rejected (401/403)**
+**API key rejected (401 / 403)**
 
-- Verify the key exists and is enabled: `GET /config/ai/apikey/<key_id>`
-- Check `expires_at` has not passed
-- Confirm `allowed_models` includes the requested model
+- Check the key exists and has not expired: `GET /netlox/v1/config/ai/apikey/<key_id>`
+- Confirm the key's `allowed_models` list includes the model being requested
 
-**Backend LLM not receiving traffic**
+**Backend not receiving traffic**
 
-- Verify endpoints are healthy in the service rule: `GET /config/services`
-- Check that `backend_protocol` is set to `"http1"` (required for AI Gateway)
-- Review loxilb logs for connection errors to backend endpoints
+- Verify all backend endpoints are healthy in the service rule
+- Ensure `backend_protocol` is set to `http1` (required for AI Gateway)
+
+**High latency on first request (KV cache miss)**
+
+- This is expected on cold start. See [KV Caching](kv-caching.md#cache-warmup) for warm-up strategies.
+
+---
 
 ## Next Steps
 
-- **New to AI Gateway?** Start with [LLM Routing](llm-routing.md) to understand the three-tier routing architecture.
-- **Setting up KV cache routing?** See [KV Caching](kv-caching.md) for configuration.
-- **Deploying on AWS?** See [AWS KV Cache Deployment](aws-kv-cache.md) for cloud-specific guidance.
-- **Need the full config reference?** See [Configuration Reference](configuration-reference.md) for all fields.
+**Routing & Access Control — works with any LLM backend:**
+
+| Goal | Start here |
+|---|---|
+| First time using AI Gateway | [LLM Routing](llm-routing.md) |
+| Set up API keys and rate limits | [API Key Management](api-key-management.md) |
+| Manage streaming token quotas | [SSE Quota Management](sse-quota-management.md) |
+| Full configuration reference | [Configuration Reference](configuration-reference.md) |
+
+**GPU & vLLM Integration — requires vLLM backends:**
+
+| Goal | Start here |
+|---|---|
+| Enable KV cache-aware routing | [KV Caching](kv-caching.md) |
+| Connect to vLLM and scrape GPU metrics | [vLLM Integration](vllm-integration.md) |
+| Balance load across model replicas | [Model Load Balancing](model-load-balancing.md) |
+| Separate prefill and decode GPU pools | [PD Disaggregation](pd-disaggregation.md) |
+| Deploy KV cache routing on AWS | [AWS KV Cache Deployment](aws-kv-cache.md) |
 
 ## See Also
 

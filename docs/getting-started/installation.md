@@ -20,16 +20,12 @@ For detailed requirements, see the [System Requirements](../reference/system-req
     Pull and run the enterprise container image:
 
     ```bash
-    docker pull ghcr.io/loxilb-io/loxilb-enterprise:latest # (1)!
+    docker pull ghcr.io/netlox-dev/loxilb-enterprise:latest
     docker run -d --privileged --name loxilb-enterprise \
       -v /dev/log:/dev/log \
       --net=host \
-      ghcr.io/loxilb-io/loxilb-enterprise:latest
+      ghcr.io/netlox-dev/loxilb-enterprise:latest
     ```
-
-    1. Contact sales@netlox.io for enterprise registry access credentials.
-
-    <!-- TODO: Confirm enterprise container registry path -->
 
 === "Kubernetes"
 

@@ -284,6 +284,102 @@ td:nth-child(even) {
 
 }
 
+/* ==========================================================================
+   Navigation UX Enhancement
+   ========================================================================== */
+
+/* --- Section headers (AI Gateway, Security Gateway, Network Gateway) --- */
+/* Make top-level section labels visually distinct from page links */
+.md-nav--primary > .md-nav__list > .md-nav__item--nested > .md-nav__link,
+.md-nav__item--section > .md-nav__link {
+  font-weight: 700;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-default-fg-color--light);
+  margin-top: 0.6rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* --- Gateway sub-section headers under AI Gateway tab --- */
+/* These are the nested "AI Gateway", "Security Gateway", "Network Gateway" groups */
+.md-nav__item--nested > .md-nav > .md-nav__list > .md-nav__item--nested > .md-nav__link {
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--md-primary-fg-color);
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+  border-top: 2px solid var(--md-primary-fg-color--light);
+}
+
+/* First gateway section doesn't need extra top margin */
+.md-nav__item--nested > .md-nav > .md-nav__list > .md-nav__item--nested:first-child > .md-nav__link {
+  margin-top: 0.4rem;
+  border-top: none;
+}
+
+/* --- Subsection headers (e.g. "AI Gateway: Routing & Access Control") --- */
+/* One level deeper than group headers — visually subordinate */
+.md-nav__item--nested > .md-nav > .md-nav__list > .md-nav__item--nested > .md-nav > .md-nav__list > .md-nav__item--nested > .md-nav__link {
+  font-weight: 500;
+  font-size: 0.63rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--md-default-fg-color--light);
+  margin-top: 0.6rem;
+  padding-top: 0;
+  border-top: none;
+  border-left: 2px solid var(--md-primary-fg-color--light);
+  padding-left: 0.5rem;
+}
+
+/* --- Active page link highlight --- */
+.md-nav__link--active {
+  font-weight: 600;
+  border-left: 3px solid var(--md-primary-fg-color);
+  padding-left: 0.5rem;
+  background-color: var(--md-primary-fg-color--transparent);
+  border-radius: 0 4px 4px 0;
+}
+
+/* --- Page links: ensure normal weight to contrast with section headers --- */
+.md-nav__item:not(.md-nav__item--nested):not(.md-nav__item--section) > .md-nav__link {
+  font-weight: 400;
+  font-size: 0.72rem;
+}
+
+/* --- Hover effect for page links --- */
+.md-nav__item:not(.md-nav__item--nested) > .md-nav__link:hover {
+  color: var(--md-primary-fg-color);
+  background-color: var(--md-primary-fg-color--transparent);
+  border-radius: 4px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+/* --- Dark mode adjustments --- */
+[data-md-color-scheme="slate"] .md-nav__item--nested > .md-nav > .md-nav__list > .md-nav__item--nested > .md-nav__link {
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-md-color-scheme="slate"] .md-nav__item--section > .md-nav__link {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+/* --- Primary color transparent (for hover/active backgrounds) --- */
+:root {
+  --md-primary-fg-color--transparent: rgba(63, 81, 181, 0.06);
+  --md-primary-fg-color--light: rgba(63, 81, 181, 0.3);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color--transparent: rgba(130, 150, 255, 0.08);
+  --md-primary-fg-color--light: rgba(130, 150, 255, 0.25);
+}
+
+
 /* Enterprise Feature admonition */
 :root {
   --md-admonition-icon--enterprise: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>');

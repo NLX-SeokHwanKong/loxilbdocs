@@ -4,242 +4,802 @@
     This feature requires loxilb-enterprise. It is not available in the community edition.
     See [Installation](../getting-started/installation.md) for enterprise binary setup.
 
-## The LLM Routing Problem
+loxilb-enterprise routes LLM inference requests intelligently across your GPU fleet — keeping hot KV caches in use, routing each model to the right backend pool, and reacting to GPU load in real time. This page explains how each routing tier works and how to configure them.
 
-Standard load balancers treat every request as independent and stateless — round-robin, least-connections, or random selection all assume that any backend can serve any request equally well. This works for web servers because each request is self-contained.
+---
 
-LLM inference breaks this assumption. When GPU-A processes a conversation, it builds a **KV cache** (key-value attention matrices — think of it as the GPU's working memory for that conversation) in its VRAM. If the next message in that conversation lands on GPU-B, GPU-B has no KV cache for it and must recompute the entire conversation context from scratch. This **cold-start penalty** costs 3-5x the latency of a cache-hit request. For a 10-turn conversation, that means reprocessing all 10 previous turns before generating a single new token.
+## Why Standard Load Balancers Break LLM Inference
 
-loxilb solves this with a **three-tier routing architecture** that preserves KV cache locality while maintaining load balance across the GPU fleet. Each tier acts as a progressively broader fallback — the system tries the most cache-efficient option first, then falls back to less specific but still intelligent routing.
+LLM inference is stateful. Every GPU processing a conversation builds a **KV cache** — the model's working memory stored in VRAM that represents everything seen so far in that conversation. This cache is what makes follow-up responses fast.
 
-## Three-Tier Routing Architecture
+The problem: a standard round-robin load balancer routes each request to a different GPU. The new GPU has no KV cache for that conversation and must recompute everything from scratch — a **3–5× latency penalty** that compounds with every additional turn.
 
-When a request arrives at the AI Gateway, it cascades through four routing tiers until one selects an endpoint:
+| Approach | What Happens |
+|---|---|
+| Round-robin (no affinity) | Every request hits a fresh GPU → cold-start recompute every time |
+| L4 sticky sessions | Same TCP connection → same GPU, but reconnects lose affinity |
+| loxilb intelligent routing | Conversation → GPU binding persists across reconnects and falls back gracefully |
+
+loxilb solves this with a **four-tier routing cascade** — trying the most cache-efficient option first, then falling back progressively.
+
+---
+
+## Four-Tier Routing Architecture
+
+When a request arrives, loxilb evaluates each tier in order and routes as soon as a tier finds a match:
 
 ```mermaid
 flowchart TD
-    A[Request Arrives] --> B{Tier 0: Session Stickiness}
-    B -->|conv_map hit| Z[Route to cached endpoint]
-    B -->|miss or unavailable| C{Tier 1.5: KV Block-Hash Match}
-    C -->|cache hit found| Z
-    C -->|no match or disabled| D{Tier 2: GPU Queue-Depth Scoring}
-    D -->|metrics available| Z
-    D -->|no metrics| E[Tier 3: CHWBL Consistent Hash Fallback]
+    A([Request Arrives]) --> B
+
+    B["🔵 Tier 0 — Session Stickiness\nconv_map lookup"]
+    C["🟠 Tier 1.5 — KV Block-Hash Match\ntokenize → hash → match GPU inventory"]
+    D["🟢 Tier 2 — GPU Queue-Depth Scoring\nleast-loaded GPU by live metrics"]
+    E["🔴 Tier 3 — CHWBL Consistent Hash\nstable fallback, no metrics needed"]
+    Z([Route to Backend])
+
+    B -->|"conv_map hit ✓"| Z
+    B -->|"miss / GPU unavailable"| C
+    C -->|"cache block match found ✓"| Z
+    C -->|"no match or disabled"| D
+    D -->|"metrics available ✓"| Z
+    D -->|"scraper not connected"| E
     E --> Z
 
-    style B fill:#e1f5fe
-    style C fill:#fff3e0
-    style D fill:#e8f5e9
-    style E fill:#fce4ec
+    style B fill:#e1f5fe,stroke:#0288d1
+    style C fill:#fff3e0,stroke:#f57c00
+    style D fill:#e8f5e9,stroke:#43a047
+    style E fill:#fce4ec,stroke:#e91e63
+    style Z fill:#f3e5f5,stroke:#8e24aa
 ```
 
-### Tier 0: Session Stickiness
+---
 
-**Networking analogy:** Sticky sessions — like `cookie insert` on a traditional L7 load balancer, but keyed on conversation ID instead of a cookie.
+## Tier 0: Session Stickiness
 
-When loxilb routes a request to a backend, it records the mapping in a **conversation map** (`conv_map`). If the same conversation sends another request, Tier 0 immediately routes it to the same endpoint — a sub-microsecond hash lookup with no computation.
+**What it does**: Instantly routes a returning conversation to the GPU that already holds its KV cache — a hash table lookup that completes before any other routing logic runs.
 
-Tier 0 falls through if the previously assigned endpoint is unavailable (health check failed, connection refused, or the endpoint was removed).
+When loxilb first routes a request to a backend, it records the `conversation ID → GPU endpoint` mapping in an internal **conversation map** (`conv_map`). Every subsequent request from the same conversation is pinned to the same GPU.
 
-### Tier 1.5: KV Block-Hash Exact Match
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant L as loxilb-enterprise
+    participant G1 as GPU 1
+    participant G2 as GPU 2
 
-**Networking analogy:** Content-based routing with cache awareness — like routing HTTP requests to the web server that has the relevant page in its local cache, except the "cache" is GPU VRAM holding transformer attention matrices.
+    rect rgb(240, 255, 240)
+        note over C,G2: Returning Conversation — Tier 0 hit (fast path)
+        C->>L: POST /v1/chat/completions<br/>X-Conversation-ID: conv-abc123
+        note over L: conv_map: conv-abc123 → GPU 1 ✓
+        L->>G1: forward (KV cache warm)
+        G1-->>L: 200 OK — fast, no recompute
+        L-->>C: response
+    end
 
-This tier requires `kvExactMode: 1` and a tokenizer file staged on the loxilb host. When active, it works as follows:
+    rect rgb(255, 243, 224)
+        note over C,G2: New Conversation — Tier 0 miss, falls through to Tier 1.5
+        C->>L: POST /v1/chat/completions<br/>(no conv-id header)
+        note over L: no mapping → try Tier 1.5 / 2 / 3
+        L->>G2: route by next tier
+        G2-->>L: 200 OK
+        note over L: record conv-id → GPU 2
+        L-->>C: response
+    end
+```
 
-1. **ZMQ Subscriber** (`ai_kv_subscriber.go`): Connects to each vLLM instance's ZMQ PUB socket. Receives msgpack-encoded `KVEventBatch` messages listing which token-block hashes each GPU currently holds. Builds a per-endpoint block inventory — essentially a map of "which GPU has which pieces of which conversations in memory."
+!!! info "Tier 0 falls through automatically"
+    If the target GPU fails a health check or is removed from the pool, Tier 0 deletes the stale mapping and cascades to the next tier. The new assignment is recorded and stickiness resumes from there.
 
-2. **Tokenizer** (`ai_kv_router.go`): When a request arrives, loxilb tokenizes the prompt (converting text to token IDs using the model's HuggingFace tokenizer), then hashes token blocks (configurable block size via `kvBlockSize`). This produces a set of block hashes representing the prompt content.
+### How loxilb Identifies a Conversation
 
-3. **Block Matching**: The hashed blocks are compared against each endpoint's block inventory. The endpoint with the **highest cache hit count** is selected — meaning the GPU that already has the most relevant KV cache blocks for this prompt.
+loxilb extracts the conversation identifier from requests using up to **four sources**, checked in priority order:
 
-4. **LRU Cache**: A 4096-entry LRU cache keyed by `(model-slug, first 512 chars of prompt)` avoids re-tokenizing identical or similar prompts. This is particularly effective for repeated system prompts.
+```mermaid
+flowchart TD
+    R([Incoming Request]) --> A
 
-The ZMQ PUB socket defaults to port 5557 on each vLLM instance. The wire format is msgpack-encoded `KVEventBatch`.
+    A{"① Well-known headers\n(auto-detected, no config needed)"}
+    A -->|"X-Conversation-ID\nX-Request-Id\nX-Session-ID\nX-Trace-ID"| HIT(["conv_id = header value"])
 
+    A -->|not found| B{"② Configured session_header_name\n(--session-header-name=...)"}
+    B -->|"plain header\ne.g. mcp-session-id"| HIT
+    B -->|"cookie:NAME\ne.g. cookie:JSESSIONID"| C1["Extract named\ncookie value"]
+    B -->|"query:PARAM\ne.g. query:session_id"| C2["Extract query\nparam from URL"]
+    B -->|"basic-auth"| C3["Extract username\nfrom Authorization header"]
+    C1 & C2 & C3 --> HIT
 
-!!! tip "When to Use Tier 1.5"
-    Enable KV-exact routing (`kvExactMode: 1`) for conversational workloads where users have multi-turn conversations with the same model. The cache hit rate improves with longer conversations and more shared system prompts. For batch/one-shot queries with no conversation continuity, Tier 2 (GPU-aware scoring) may be more effective.
+    A -->|not found| D{"③ Backend-assigned session\n(session learning — no client config needed)"}
+    D -->|"backend response contains\nconfigured header"| LEARN["loxilb reads backend response header\nstores: custom_{header}_{value} → GPU"]
+    LEARN --> HIT2(["conv_id = custom_{header}_{value}"])
 
-### Tier 2: GPU Queue-Depth Scoring
+    A -->|none of above| E{"④ Auto-generated from prompt content\n(fallback — requires no config)"}
+    E --> HASH["Hash JSON body prefix\nauto-{prefix_hash}-{salt}"]
+    HASH --> HIT3(["conv_id = auto-{hex}-{hex}"])
 
-**Networking analogy:** Least-connections load balancing with health-awareness — like choosing the server with the shortest request queue, but using GPU-specific metrics instead of connection count.
+    style A fill:#e1f5fe,stroke:#0288d1
+    style B fill:#fff3e0,stroke:#f57c00
+    style D fill:#e8f5e9,stroke:#43a047
+    style E fill:#fce4ec,stroke:#e91e63
+```
 
-loxilb's `VllmScraper` polls each backend vLLM instance's `/metrics` HTTP endpoint every 10 seconds (configurable). It extracts two key metrics:
+#### Source 1 — Well-Known Headers (automatic, no config)
 
-| Metric | Type | What It Measures |
-|--------|------|-----------------|
-| `vllm:num_requests_waiting` | Gauge | Number of requests queued, waiting for GPU time |
-| `vllm:gpu_cache_usage_perc` | Gauge | GPU KV cache fill percentage (0.0 to 1.0) |
+loxilb automatically recognizes these standard headers from common LLM frameworks and API clients:
 
-The scraper updates the C-side queue depth via `llb_ai_update_ep_queue_depth()` CGO call, enabling the endpoint selection algorithm to combine queue depth and cache usage to find the **least-loaded, most-available GPU**.
+| Header | Sent by |
+|---|---|
+| `X-Conversation-ID` | [LangChain](https://python.langchain.com/), [LangGraph](https://langchain-ai.github.io/langgraph/), custom agents |
+| `X-Request-Id` | [OpenAI Python SDK](https://github.com/openai/openai-python), [OpenAI Node SDK](https://github.com/openai/openai-node), reverse proxies |
+| `X-Session-ID` | Custom agents, enterprise middleware |
+| `X-Trace-ID` | Distributed tracing systems (Jaeger, Zipkin) used for affinity |
 
-Use `sel: 9` (LbSelGPUAware) to enable GPU-aware selection.
+No configuration is needed — if the client sends any of these headers, loxilb uses the value as the conversation key.
 
+#### Source 2 — Configured Session Header
 
-### Tier 3: Fallback — CHWBL Consistent Hash
+Set `--session-header-name` on the LB rule to tell loxilb which header (or cookie, query param, or auth identity) carries the session ID. Four extraction modes:
 
-**Networking analogy:** Consistent hashing with bounded loads — the same algorithm used for distributing cache keys across a memcached cluster.
+| `session_header_name` value | What loxilb extracts | Example client |
+|---|---|---|
+| `mcp-session-id` | Full value of `mcp-session-id:` header | MCP clients |
+| `cookie:JSESSIONID` | `JSESSIONID` value from `Cookie:` header | Java / Spring applications |
+| `query:session_id` | `session_id` value from the URL query string | REST clients with URL-encoded sessions |
+| `basic-auth` | Username from `Authorization: Basic ...` header | Internal services using HTTP Basic Auth |
 
-When no KV cache match exists (Tier 1.5 disabled or no match found) and no GPU metrics are available (Tier 2 scraper not connected), loxilb falls back to `LbSelCHWBL` (consistent hash with bounded loads). This provides stable endpoint assignment with minimal disruption when endpoints are added or removed.
+#### Source 3 — Session Learning from Backend Response
+
+When `--select=persist` is configured with `--session-header-name`, loxilb **reads the backend response** headers to learn the session binding automatically. The backend assigns the session ID (e.g. an MCP server returning `mcp-session-id: sess-abc123`) and loxilb records it immediately — so the very next request with that value is already pinned.
+
+This is how MCP session stickiness works: no client-side configuration required. See [MCP Routing](mcp-gateway.md) for details.
+
+#### Source 4 — Auto-Generated from Prompt (fallback)
+
+If none of the above sources yield a conversation ID, loxilb parses the JSON request body (OpenAI chat format), extracts the prompt prefix from `messages[].content`, and computes:
+
+```
+conv_id = "auto-{xxhash64(prompt_prefix):016x}-{salt:08x}"
+```
+
+This provides reasonable session locality for clients that send no session headers at all — requests with the same conversation context naturally hash to the same GPU.
+
+### Conv-Map Properties
+
+| Property | Value |
+|---|---|
+| Key format | `custom_{header_name}_{header_value}` (learned) or raw header value (client-sent) |
+| Max key length | 128 bytes |
+| TTL | 3600 seconds (1 hour) — refreshed on every request |
+| Cleanup interval | Every 300 seconds (5 minutes) |
+| Stale mapping behavior | Deleted immediately when target GPU becomes unhealthy |
+
+---
+
+## Tier 1.5: KV Block-Hash Match
+
+**What it does**: Finds the GPU that already holds the **most relevant KV cache blocks** for this specific prompt — even for a brand-new conversation.
+
+This tier tokenizes the incoming prompt and matches its content against each GPU's live block inventory. The GPU with the most existing blocks for this prompt wins — maximizing cache reuse without requiring any client-side session tracking.
+
+```mermaid
+flowchart LR
+    subgraph input ["Incoming Prompt"]
+        P["User message\n+ system prompt"]
+    end
+
+    subgraph loxilb ["loxilb-enterprise"]
+        direction TB
+        T["① Tokenize\nHuggingFace tokenizer\n(LRU cache: 4096 entries)"]
+        H["② Hash token blocks\nblock size = kvBlockSize"]
+        M["③ Compare against\neach GPU's block inventory"]
+        T --> H --> M
+    end
+
+    subgraph gpus ["GPU Backends (ZMQ feed, port 5557)"]
+        direction TB
+        G1["GPU 1\n3 / 8 blocks match"]
+        G2["GPU 2\n7 / 8 blocks match ✓✓"]
+        G3["GPU 3\n1 / 8 blocks match"]
+    end
+
+    P --> T
+    M --> G1 & G2 & G3
+    G2 -->|"highest hit count"| R(["Route to GPU 2"])
+
+    style G2 fill:#e8f5e9,stroke:#43a047
+    style R fill:#e8f5e9,stroke:#43a047
+    style loxilb fill:#e8f0fe,stroke:#4a7bee
+```
+
+**How GPU block inventories stay current**: Each vLLM instance publishes a real-time feed of its cached token-block hashes over a **ZMQ PUB socket** (default port 5557). loxilb subscribes to all backends and maintains a live per-GPU block inventory — updated as vLLM loads and evicts blocks from VRAM.
+
+!!! tip "When to enable Tier 1.5"
+    Set `kvExactMode: 1` for workloads with multi-turn conversations or shared system prompts (e.g. customer support bots). For single-shot batch queries with no conversation context, Tier 2 alone is usually sufficient.
+
+**Requirements**: `kvExactMode: 1` in the service config + tokenizer file staged on the loxilb host. See [KV Caching](kv-caching.md) for setup steps.
+
+---
+
+## Tier 2: GPU Queue-Depth Scoring
+
+**What it does**: Routes to the least-loaded GPU in real time, using live metrics scraped from each vLLM instance every 10 seconds.
+
+```mermaid
+flowchart LR
+    subgraph scraper ["VllmScraper — every 10 seconds"]
+        S["Poll /metrics on each backend"]
+    end
+
+    subgraph backends ["GPU Backends"]
+        direction TB
+        G1["GPU 1\nqueue: 6 reqs\ncache: 87% full"]
+        G2["GPU 2\nqueue: 1 req\ncache: 31% full ✓"]
+        G3["GPU 3\nqueue: 4 reqs\ncache: 72% full"]
+    end
+
+    subgraph scoring ["Endpoint Scoring"]
+        SC["queue_depth + cache_pressure\n→ lowest score wins"]
+    end
+
+    S --> G1 & G2 & G3
+    G1 & G2 & G3 --> SC
+    SC -->|"GPU 2 wins"| R(["Route to GPU 2"])
+
+    style G2 fill:#e8f5e9,stroke:#43a047
+    style R fill:#e8f5e9,stroke:#43a047
+    style scraper fill:#e8f0fe,stroke:#4a7bee
+```
+
+The scraper collects two signals from each backend:
+
+| Metric | What It Measures | Effect on Routing |
+|---|---|---|
+| `vllm:num_requests_waiting` | Requests queued, waiting for GPU time | High queue → penalize this GPU |
+| `vllm:gpu_cache_usage_perc` | KV cache VRAM fill (0.0 – 1.0) | Near full → penalize this GPU |
+
+Use `sel: 9` to enable GPU-aware scoring. See [vLLM Integration](vllm-integration.md) for scraper configuration.
+
+---
+
+## Tier 3: Consistent Hash Fallback
+
+**What it does**: Provides stable endpoint assignment when no GPU metrics are available and no KV cache match was found — always active as a safety net.
+
+loxilb uses **CHWBL** (Consistent Hash with Bounded Loads) — the same algorithm used in large-scale CDN and cache clusters. Requests are mapped to a position on a virtual ring, and the nearest endpoint is selected. When backends are added or removed, only a minimal fraction of requests are remapped; existing conversation-to-GPU bindings remain stable for the majority of traffic.
+
+This tier requires no configuration. Use `sel: 8` to use CHWBL as the **primary** algorithm (bypassing Tiers 1.5 and 2 for pure conversation locality).
+
+---
 
 ## Model-Name Routing
 
-The AI Gateway supports **per-model endpoint pools** on the same VIP and port. This allows you to run different LLM models on different GPU tiers — for example, a 70B parameter model on A100-80GB GPUs and an 8B model on L4 GPUs — while exposing a single API endpoint to clients.
+The AI Gateway supports **per-model endpoint pools** on the same VIP and port. Different GPU tiers serve different models under a single API endpoint — clients use the standard `"model"` field and loxilb routes to the matching pool.
 
-How it works:
+```mermaid
+flowchart TD
+    A([Incoming Request]) --> B
 
-1. **Per-model rules**: The `model_name` field in the LB service configuration creates distinct endpoint pools. Multiple LB rules on the same `VIP:Port` can differ only in `model_name`, each pointing to a different set of backend endpoints.
+    B{"Extract model name\n(checked in priority order)"}
+    B -->|"① X-Model header"| C
+    B -->|"② JSON body: model field"| C
+    B -->|"③ no match"| D["Wildcard pool\n(default backends)"]
 
-2. **Routing priority**: When a request arrives, loxilb determines the target model in this order:
-    - `X-Model` HTTP header (highest priority)
-    - `"model"` field in the JSON request body
-    - Wildcard pool (no `model_name` set — catches unmatched requests)
+    C{"Match to\nendpoint pool"}
+    C -->|llama3-70b| E["A100-80GB pool\n10.0.1.1:8000\n10.0.1.2:8000"]
+    C -->|llama3-8b| F["L4 GPU pool\n10.0.2.1:8000\n10.0.2.2:8000"]
+    C -->|gemma-2-27b| G["H100 pool\n10.0.3.1:8000"]
 
-3. **HTTP body parsing**: The model name is extracted from the JSON body by sockproxy.c using the jsmn JSON parser, operating at C speed in the data plane.
+    style B fill:#e1f5fe,stroke:#0288d1
+    style E fill:#e8f5e9,stroke:#43a047
+    style F fill:#e8f5e9,stroke:#43a047
+    style G fill:#e8f5e9,stroke:#43a047
+```
 
+Each model pool is a separate LB rule on the same `VIP:Port` with a distinct `model_name` field. Rules without a `model_name` catch all unmatched requests.
 
 See [Model Load Balancing](model-load-balancing.md) for configuration examples.
 
-## CGO Bridge Pattern
+---
 
-For engineers who want to understand the implementation: all AI Gateway enforcement follows a consistent C-to-Go bridge pattern.
-
-```
-C sockproxy (hot path, data plane)
-  → //export llb_ai_*() function in Go
-  → Pure Go logic (validateAPIKeyInternal, rateLimitCheckInternal, etc.)
-  → Return C.int decision to sockproxy
-```
-
-This design allows:
-
-- **Data-plane speed enforcement**: API key validation, rate limiting, and security scanning execute in the request path without leaving the proxy process.
-- **Testable business logic**: All enforcement logic is pure Go, testable with standard Go test tooling — no CGO required for unit tests.
-- **Consistent pattern**: Every AI Gateway feature (API keys, rate limits, LlamaFirewall, token quotas) uses the same bridge pattern, making the codebase predictable.
-
-
-## Prerequisites and Configuration Pointers
+## Prerequisites
 
 !!! warning "Required: FullProxy Mode"
-    All AI Gateway routing features require `mode: 4` (LBModeFullProxy) and `backend_protocol: "http1"`. Other LB modes perform L4 load balancing only and cannot inspect HTTP bodies for model routing or KV cache matching.
+    All AI Gateway routing features require `mode: 4` (FullProxy) and `backend_protocol: "http1"`. Other LB modes perform L4 load balancing only and cannot inspect HTTP bodies for model routing or KV cache matching.
 
 | What You Want | Where to Go |
-|---------------|-------------|
+|---|---|
 | Configure KV cache-aware routing | [KV Caching](kv-caching.md) — tokenizer staging, ZMQ setup, kvExactMode config |
 | Set up vLLM metrics scraping | [vLLM Integration](vllm-integration.md) — scraper setup, metrics reference |
 | Configure per-model endpoint pools | [Model Load Balancing](model-load-balancing.md) — model_name routing, multi-rule examples |
 | Deploy on AWS EKS | [AWS KV Cache Deployment](aws-kv-cache.md) — security groups, ZMQ networking |
-| See all config fields | [Configuration Reference](configuration-reference.md) — complete field reference with source annotations |
+| See all config fields | [Configuration Reference](configuration-reference.md) — complete field reference |
 
-## REST API Config
+---
 
-LLM routing modes are configured via the `sel` field in `serviceArguments` when creating an LB service rule. The `sel` field controls which load balancing algorithm is used for endpoint selection:
+## Configuration
 
-| `sel` Value | Mode | Best For |
-|-------------|------|----------|
-| `8` | Consistent Hash with Bounded Loads (CHWBL) | KV cache locality — conversational workloads |
-| `9` | GPU-Aware | Throughput — batch/independent queries with vLLM metrics |
-| `10` | Weighted Round-Robin with Hash | Mixed workloads or transition from standard LB |
+The `sel` field controls which routing algorithm is active:
 
-### Configure GPU-Aware Routing (sel: 9)
+| `sel` | Algorithm | Best For |
+|---|---|---|
+| `8` | CHWBL Consistent Hash | Conversational workloads — maximizes KV cache locality |
+| `9` | GPU-Aware Scoring | Throughput workloads — balances queue depth and cache pressure |
+| `10` | Weighted Round-Robin with Hash | Mixed or transitional workloads |
 
-```bash
-curl -X POST http://loxilb:11111/netlox/v1/config/services \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "serviceArguments": {
-      "externalIP": "192.168.1.100",
-      "port": 443,
-      "protocol": "tcp",
-      "mode": 4,
-      "sel": 9,
-      "backend_protocol": "http1"
-    },
-    "endpoints": [
-      {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
-      {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1}
-    ]
-  }'
+!!! tip "CLI vs REST API"
+    Every example below shows both the [`loxicmd` CLI](../cmd.md) and the equivalent REST API call. Use whichever fits your automation workflow.
 
-# Response (200):
-# {"result": "Success"}
+---
+
+### Option 1 — GPU-Aware Routing (`sel: 9`)
+
+Best for throughput-heavy workloads where requests are largely independent. loxilb polls each vLLM backend's `/metrics` endpoint every 10 seconds and routes to the least-loaded GPU.
+
+```mermaid
+flowchart LR
+    A(["🤖 LLM Client\n(batch / API)"])
+
+    subgraph loxilb ["loxilb-enterprise  VIP: 192.168.1.100"]
+        direction TB
+        GW["Port 443\nsel=9  GPU-Aware\nPoll /metrics every 10s"]
+    end
+
+    subgraph gpus ["vLLM GPU Pool  HTTP :8000"]
+        direction TB
+        G1["GPU 1\n10.0.1.1\nqueue: 1 req ✓"]
+        G2["GPU 2\n10.0.1.2\nqueue: 6 reqs"]
+        G3["GPU 3\n10.0.1.3\nqueue: 4 reqs"]
+    end
+
+    A -- "POST /v1/chat/completions" --> GW
+    GW -- "→ least-loaded GPU" --> G1
+    GW -.-> G2
+    GW -.-> G3
+
+    style loxilb fill:#e8f0fe,stroke:#4a7bee
+    style gpus fill:#e8f5e9,stroke:#43a047
+    style G1 fill:#c8e6c9,stroke:#388e3c
 ```
 
-### Configure KV Cache-Aware Routing (sel: 8)
+=== "loxicmd"
 
-```bash
-curl -X POST http://loxilb:11111/netlox/v1/config/services \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "serviceArguments": {
-      "externalIP": "192.168.1.100",
-      "port": 443,
-      "protocol": "tcp",
-      "mode": 4,
-      "sel": 8,
-      "kvExactMode": 1,
-      "kvBlockSize": 16,
-      "backend_protocol": "http1"
-    },
-    "endpoints": [
-      {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
-      {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1}
-    ]
-  }'
+    ```bash
+    loxicmd create lb 192.168.1.100 \
+      --tcp=443:8000 \
+      --select=gpu \
+      --mode=fullproxy \
+      --endpoints=10.0.1.1:1,10.0.1.2:1,10.0.1.3:1
+    ```
 
-# Response (200):
-# {"result": "Success"}
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb-host:11111/netlox/v1/config/loadbalancer \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "192.168.1.100",
+          "port": 443,
+          "protocol": "tcp",
+          "mode": 4,
+          "sel": 9,
+          "backend_protocol": "http1"
+        },
+        "endpoints": [
+          {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.3", "targetPort": 8000, "weight": 1}
+        ]
+      }'
+    ```
+
+Clients connect to: `https://192.168.1.100:443/v1/chat/completions`
+
+---
+
+### Option 2 — KV Cache-Aware Routing (`sel: 8`)
+
+Best for multi-turn conversational workloads. loxilb subscribes to each vLLM backend's ZMQ feed (port 5557), tracks which GPU holds which KV cache blocks, and routes each request to the GPU most likely to have a cache hit.
+
+```mermaid
+flowchart LR
+    A(["🤖 LLM Client\n(multi-turn chat)"])
+
+    subgraph loxilb ["loxilb-enterprise  VIP: 192.168.1.100"]
+        direction TB
+        GW["Port 443\nsel=8  CHWBL + KV-exact\nZMQ subscriber :5557"]
+    end
+
+    subgraph gpus ["vLLM GPU Pool  HTTP :8000"]
+        direction TB
+        G1["GPU 1  10.0.1.1\nKV blocks: A B C"]
+        G2["GPU 2  10.0.1.2\nKV blocks: D E F G H ✓✓"]
+        G3["GPU 3  10.0.1.3\nKV blocks: I J"]
+    end
+
+    subgraph zmq ["ZMQ PUB feeds  :5557"]
+        Z1["vLLM-1 block events"]
+        Z2["vLLM-2 block events"]
+        Z3["vLLM-3 block events"]
+    end
+
+    A -- "POST /v1/chat" --> GW
+    GW -- "→ highest block-match" --> G2
+    GW -.-> G1
+    GW -.-> G3
+    Z1 & Z2 & Z3 -- "live block inventory" --> GW
+
+    style loxilb fill:#e8f0fe,stroke:#4a7bee
+    style gpus fill:#e8f5e9,stroke:#43a047
+    style G2 fill:#c8e6c9,stroke:#388e3c
+    style zmq fill:#fff3e0,stroke:#f57c00
 ```
 
-For detailed KV cache configuration fields, see [KV Caching](kv-caching.md). For GPU-aware scraper setup, see [vLLM Integration](vllm-integration.md).
+=== "loxicmd"
+
+    ```bash
+    loxicmd create lb 192.168.1.100 \
+      --tcp=443:8000 \
+      --select=chwbl \
+      --mode=fullproxy \
+      --kv-exact-mode=1 \
+      --kv-block-size=16 \
+      --endpoints=10.0.1.1:1,10.0.1.2:1,10.0.1.3:1
+    ```
+
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb-host:11111/netlox/v1/config/loadbalancer \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "192.168.1.100",
+          "port": 443,
+          "protocol": "tcp",
+          "mode": 4,
+          "sel": 8,
+          "kvExactMode": 1,
+          "kvBlockSize": 16,
+          "backend_protocol": "http1"
+        },
+        "endpoints": [
+          {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.3", "targetPort": 8000, "weight": 1}
+        ]
+      }'
+    ```
+
+For tokenizer staging and ZMQ setup, see [KV Caching](kv-caching.md).
+
+---
+
+### Option 3 — Session Stickiness by HTTP Header
+
+For any custom header your application uses as a session identifier (e.g. `X-Thread-ID`, `mcp-session-id`):
+
+```mermaid
+flowchart LR
+    A(["🤖 AI Agent\nX-Thread-ID: thread-xyz"])
+
+    subgraph loxilb ["loxilb-enterprise  VIP: 192.168.1.100"]
+        direction TB
+        GW["Port 443\nsel=3  persist\nsession-header-name=X-Thread-ID"]
+        CM["conv_map\nthread-xyz → GPU 2 ✓"]
+        GW --> CM
+    end
+
+    subgraph gpus ["vLLM GPU Pool  HTTP :8000"]
+        direction TB
+        G1["GPU 1  10.0.1.1"]
+        G2["GPU 2  10.0.1.2 ✓\n(KV cache warm)"]
+        G3["GPU 3  10.0.1.3"]
+    end
+
+    A -- "POST /v1/chat\nX-Thread-ID: thread-xyz" --> GW
+    CM -- "pinned" --> G2
+    CM -.-> G1
+    CM -.-> G3
+
+    style loxilb fill:#e8f0fe,stroke:#4a7bee
+    style gpus fill:#e8f5e9,stroke:#43a047
+    style G2 fill:#c8e6c9,stroke:#388e3c
+    style CM fill:#f3e5f5,stroke:#8e24aa
+```
+
+=== "loxicmd"
+
+    ```bash
+    loxicmd create lb 192.168.1.100 \
+      --tcp=443:8000 \
+      --select=persist \
+      --mode=fullproxy \
+      --session-header-name=X-Thread-ID \
+      --endpoints=10.0.1.1:1,10.0.1.2:1,10.0.1.3:1
+    ```
+
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb-host:11111/netlox/v1/config/loadbalancer \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "192.168.1.100",
+          "port": 443,
+          "protocol": "tcp",
+          "mode": 4,
+          "sel": 3,
+          "session_header_name": "X-Thread-ID",
+          "backend_protocol": "http1"
+        },
+        "endpoints": [
+          {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.3", "targetPort": 8000, "weight": 1}
+        ]
+      }'
+    ```
+
+---
+
+### Option 4 — Session Stickiness by Cookie
+
+For web applications that carry the session in an HTTP cookie (e.g. Java/Spring `JSESSIONID`, custom session cookies):
+
+```mermaid
+flowchart LR
+    A(["🌐 Web App\nCookie: JSESSIONID=abc123"])
+
+    subgraph loxilb ["loxilb-enterprise  VIP: 192.168.1.100"]
+        direction TB
+        GW["Port 443\nsel=3  persist\nsession-header-name=cookie:JSESSIONID"]
+        CM["conv_map\nabc123 → GPU 1 ✓"]
+        GW --> CM
+    end
+
+    subgraph gpus ["LLM Backends  HTTP :8000"]
+        direction TB
+        G1["GPU 1  10.0.1.1 ✓\n(session warm)"]
+        G2["GPU 2  10.0.1.2"]
+        G3["GPU 3  10.0.1.3"]
+    end
+
+    A -- "POST /v1/chat\nCookie: JSESSIONID=abc123" --> GW
+    CM -- "pinned" --> G1
+
+    style loxilb fill:#e8f0fe,stroke:#4a7bee
+    style gpus fill:#e8f5e9,stroke:#43a047
+    style G1 fill:#c8e6c9,stroke:#388e3c
+    style CM fill:#f3e5f5,stroke:#8e24aa
+```
+
+=== "loxicmd"
+
+    ```bash
+    loxicmd create lb 192.168.1.100 \
+      --tcp=443:8000 \
+      --select=persist \
+      --mode=fullproxy \
+      --session-header-name=cookie:JSESSIONID \
+      --endpoints=10.0.1.1:1,10.0.1.2:1,10.0.1.3:1
+    ```
+
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb-host:11111/netlox/v1/config/loadbalancer \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "192.168.1.100",
+          "port": 443,
+          "protocol": "tcp",
+          "mode": 4,
+          "sel": 3,
+          "session_header_name": "cookie:JSESSIONID",
+          "backend_protocol": "http1"
+        },
+        "endpoints": [
+          {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.3", "targetPort": 8000, "weight": 1}
+        ]
+      }'
+    ```
+
+---
+
+### Option 5 — Session Stickiness by Query Parameter
+
+For REST clients that pass the session in the URL (e.g. `?session_id=abc`):
+
+```mermaid
+flowchart LR
+    A(["📡 REST Client\nGET /v1/chat?session_id=sid-789"])
+
+    subgraph loxilb ["loxilb-enterprise  VIP: 192.168.1.100"]
+        direction TB
+        GW["Port 443\nsel=3  persist\nsession-header-name=query:session_id"]
+        CM["conv_map\nsid-789 → GPU 3 ✓"]
+        GW --> CM
+    end
+
+    subgraph gpus ["LLM Backends  HTTP :8000"]
+        direction TB
+        G1["GPU 1  10.0.1.1"]
+        G2["GPU 2  10.0.1.2"]
+        G3["GPU 3  10.0.1.3 ✓"]
+    end
+
+    A -- "?session_id=sid-789" --> GW
+    CM -- "pinned" --> G3
+
+    style loxilb fill:#e8f0fe,stroke:#4a7bee
+    style gpus fill:#e8f5e9,stroke:#43a047
+    style G3 fill:#c8e6c9,stroke:#388e3c
+    style CM fill:#f3e5f5,stroke:#8e24aa
+```
+
+=== "loxicmd"
+
+    ```bash
+    loxicmd create lb 192.168.1.100 \
+      --tcp=443:8000 \
+      --select=persist \
+      --mode=fullproxy \
+      --session-header-name=query:session_id \
+      --endpoints=10.0.1.1:1,10.0.1.2:1,10.0.1.3:1
+    ```
+
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb-host:11111/netlox/v1/config/loadbalancer \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "192.168.1.100",
+          "port": 443,
+          "protocol": "tcp",
+          "mode": 4,
+          "sel": 3,
+          "session_header_name": "query:session_id",
+          "backend_protocol": "http1"
+        },
+        "endpoints": [
+          {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.3", "targetPort": 8000, "weight": 1}
+        ]
+      }'
+    ```
+
+---
+
+### Option 6 — Session Stickiness by Basic Auth Username
+
+Routes each authenticated user consistently to the same GPU — useful for internal services or per-user model personalization:
+
+```mermaid
+flowchart LR
+    A(["👤 Internal Service\nAuthorization: Basic dXNlcjE6cGFzcw=="])
+
+    subgraph loxilb ["loxilb-enterprise  VIP: 192.168.1.100"]
+        direction TB
+        GW["Port 443\nsel=3  persist\nsession-header-name=basic-auth"]
+        DEC["Decode Basic Auth\n→ username: user1"]
+        CM["conv_map\nuser1 → GPU 2 ✓"]
+        GW --> DEC --> CM
+    end
+
+    subgraph gpus ["LLM Backends  HTTP :8000"]
+        direction TB
+        G1["GPU 1  10.0.1.1"]
+        G2["GPU 2  10.0.1.2 ✓\n(user1's context warm)"]
+        G3["GPU 3  10.0.1.3"]
+    end
+
+    A -- "POST /v1/chat\nAuthorization: Basic ..." --> GW
+    CM -- "pinned" --> G2
+
+    style loxilb fill:#e8f0fe,stroke:#4a7bee
+    style gpus fill:#e8f5e9,stroke:#43a047
+    style G2 fill:#c8e6c9,stroke:#388e3c
+    style CM fill:#f3e5f5,stroke:#8e24aa
+    style DEC fill:#fff3e0,stroke:#f57c00
+```
+
+=== "loxicmd"
+
+    ```bash
+    loxicmd create lb 192.168.1.100 \
+      --tcp=443:8000 \
+      --select=persist \
+      --mode=fullproxy \
+      --session-header-name=basic-auth \
+      --endpoints=10.0.1.1:1,10.0.1.2:1,10.0.1.3:1
+    ```
+
+=== "REST API"
+
+    ```bash
+    curl -X POST http://loxilb-host:11111/netlox/v1/config/loadbalancer \
+      -H "Content-Type: application/json" \
+      -d '{
+        "serviceArguments": {
+          "externalIP": "192.168.1.100",
+          "port": 443,
+          "protocol": "tcp",
+          "mode": 4,
+          "sel": 3,
+          "session_header_name": "basic-auth",
+          "backend_protocol": "http1"
+        },
+        "endpoints": [
+          {"endpointIP": "10.0.1.1", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.2", "targetPort": 8000, "weight": 1},
+          {"endpointIP": "10.0.1.3", "targetPort": 8000, "weight": 1}
+        ]
+      }'
+    ```
+
+For GPU scraper setup see [vLLM Integration](vllm-integration.md). For KV cache fields see [KV Caching](kv-caching.md).
+
+---
 
 ## Verify
 
-Confirm the routing mode is active by listing configured services:
+Confirm the active routing mode:
 
 ```bash
-curl http://loxilb:11111/netlox/v1/config/services \
-  -H "Authorization: Bearer <token>"
+loxicmd get lb -o wide
 ```
 
-Check that your service rule shows the expected `sel` value in the response. For GPU-aware mode (`sel: 9`), also verify the GPU feature is enabled:
+For GPU-aware mode (`sel: 9`), also verify the scraper is connected and metrics are flowing:
 
 ```bash
-curl http://loxilb:11111/netlox/v1/config/gpu/status \
-  -H "Authorization: Bearer <token>"
-
+curl http://loxilb-host:11111/netlox/v1/config/gpu/status
 # Expected: {"gpu_aware_enabled": true, "active_scrapers": N}
 ```
+
+---
 
 ## Troubleshooting
 
 **Uneven load distribution across GPUs**
 
-- Verify the `sel` value matches your intended routing mode: `GET /config/services`
-- For GPU-aware mode (`sel: 9`), confirm the vLLM scraper is connected and metrics are being collected: `GET /config/gpu/status`
-- Check that endpoint weights are balanced if using weighted modes
+- Check the `sel` value in use: `loxicmd get lb -o wide`
+- For GPU-aware mode (`sel: 9`), confirm the vLLM scraper is connected: `GET /netlox/v1/config/gpu/status`
+- Verify that endpoint weights are equal if you expect balanced distribution
 
 **Model not routable (requests failing with 502)**
 
-- Confirm all backend endpoints are healthy and accepting connections
+- Confirm all backend endpoints are healthy: `loxicmd get ep -o wide`
 - Check that `backend_protocol` is set to `"http1"` in the service rule
-- Verify the `model_name` field matches the model served by the backend (if using per-model routing)
+- Verify the `model_name` value matches exactly what the client sends in the `"model"` field or `X-Model` header
 
 **KV cache hit rate is low**
 
 - Ensure `kvExactMode: 1` is set and the tokenizer file is staged on the loxilb host
-- Verify ZMQ connectivity to vLLM instances on port 5557
-- Check that `kvBlockSize` matches the block size used by the vLLM instances
+- Verify ZMQ connectivity to vLLM instances on port 5557: `telnet <vllm-host> 5557`
+- Check that `kvBlockSize` matches the block size configured in your vLLM instances
+
+**All requests going to one GPU**
+
+- Tier 0 session stickiness is working as intended — each unique conversation ID is pinned to its assigned GPU. This is correct behavior for stateful agents.
+- If you want pure load balancing without stickiness, use `sel: 9` (GPU-aware scoring).
+
+---
 
 ## See Also
 
-- [AI Gateway Overview](overview.md) — Conceptual introduction and traffic flow diagram
-- [KV Caching](kv-caching.md) — KV-exact routing configuration
+- [AI Gateway Overview](overview.md) — Feature overview and traffic flow diagram
+- [KV Caching](kv-caching.md) — KV-exact routing configuration and tokenizer setup
 - [vLLM Integration](vllm-integration.md) — GPU metrics scraping setup
 - [Model Load Balancing](model-load-balancing.md) — Per-model endpoint pools
 - [PD Disaggregation](pd-disaggregation.md) — Prefill/decode separation
 - [Configuration Reference](configuration-reference.md) — All AI Gateway config fields
-- [GPU and LLM Catalog API Reference](../reference/api.md#ai-gateway-gpu-and-llm-catalog)
+- [API Reference](../reference/api.md)
