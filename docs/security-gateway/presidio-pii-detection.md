@@ -10,6 +10,70 @@ Microsoft Presidio is an open-source PII (Personally Identifiable Information) d
 
 Why at the gateway? PII detection at the gateway layer means **no individual application needs PII scanning logic**. One enforcement point protects all LLM traffic flowing through loxilb, regardless of which application or client originated the request.
 
+## PII Detection Evaluation Path
+
+The following sequence diagram shows how Presidio PII detection processes each request, from body extraction through entity detection to masking application:
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant SP as sockproxy_http.c
+    participant PC as presidio_config.c<br/>(shared memory)
+    participant CB as Circuit Breaker
+    participant PS as sockproxy_presidio.c
+    participant Go as Go CGO Bridge
+    participant PA as Presidio Analyzer<br/>(gRPC :50051)
+    participant AN as Presidio Anonymizer
+
+    Client->>SP: HTTP POST /v1/chat/completions
+    SP->>PC: presidio_config_get()
+    PC-->>SP: config (enabled, threshold, url_patterns)
+
+    alt PII detection disabled or body too small/large
+        SP->>SP: Skip PII scan
+    else PII detection enabled
+        SP->>SP: Extract HTTP body from rcvbuf
+        SP->>SP: Check URL against url_patterns[]
+        alt URL matches exclude pattern
+            SP->>SP: Skip PII scan for this URL
+        else URL allowed
+            SP->>CB: presidio_circuit_breaker_allow_request()
+            alt Circuit OPEN
+                CB-->>SP: Rejected (apply fail_mode)
+                alt fail_mode = FAIL_OPEN
+                    SP->>SP: Allow traffic through (bypass)
+                else fail_mode = FAIL_CLOSED
+                    SP->>SP: Block traffic
+                end
+            else Circuit CLOSED or HALF_OPEN
+                CB-->>PS: Allowed
+                PS->>Go: llb_presidio_scan(content, "en", catalog_id)
+                Go->>PA: gRPC AnalyzeRequest
+                PA-->>Go: AnalyzeResponse (entities[])
+                alt Entities detected above score_threshold
+                    Go->>AN: AnonymizeRequest (with operators)
+                    AN-->>Go: AnonymizedText
+                    Go-->>PS: pii_scan_result_t (entity_count, anonymized_text)
+                    PS-->>SP: Store in ent->pii_masked_text (DEFERRED)
+                    Note over SP: Masking applied later<br/>in proxy_try_epxmit()
+                else No entities above threshold
+                    Go-->>PS: pii_scan_result_t (entity_count=0)
+                    PS-->>SP: No masking needed
+                end
+                PS->>CB: record_success()
+            end
+        end
+    end
+
+    SP->>SP: Continue to LlamaFirewall scan
+```
+
+### Key Architecture Decisions
+
+- **Deferred masking**: PII-masked text is stored in `ent->pii_masked_text` and applied later in `proxy_try_epxmit()` rather than modifying the receive buffer in-place. This prevents corruption of HTTP header parsing for subsequent pipeline stages.
+- **URL pattern filtering**: Not all endpoints need PII scanning. The URL pattern matching system supports include-list and exclude-list modes, allowing operators to target only AI-related endpoints.
+- **Circuit breaker resilience**: If the Presidio analyzer becomes unreachable, the circuit breaker opens and applies the configured fail mode rather than blocking on timeouts.
+
 ## What Presidio Detects
 
 Presidio uses **structural and pattern-based detection** to identify PII entities:
@@ -34,37 +98,88 @@ Presidio and [LlamaFirewall](llamafirewall.md) take different approaches to PII 
 | **False positives** | Low for structured data | Higher, but catches more subtle leakage |
 | **Recommendation** | Enable for all deployments | Enable for defense-in-depth |
 
-For comprehensive protection, **enable both**: Presidio catches structural PII patterns, LlamaFirewall's PIIDetection scanner catches contextual PII exposure that pattern matching cannot detect.
+## Deep Internals
 
-## Architecture
+### C-Layer Implementation (sockproxy_presidio.c)
 
-loxilb communicates with Presidio through a REST API for configuration management and gRPC for runtime scanning.
+The Presidio integration is implemented in `sockproxy_presidio.c` (1376 lines) following the **xSync Consumer Pattern** used consistently across loxilb's external service integrations. Key implementation details:
 
-### REST API Configuration
+**Initialization flow:**
 
-The REST API manages Presidio configuration. The shared memory mechanism is the runtime implementation — the REST API writes configuration that the dataplane reads from shared memory at `/dev/shm/loxilb_presidio_config`.
+1. `presidio_init()` calls `presidio_config_init()` to set up shared memory at `/dev/shm/loxilb_presidio_config`
+2. Initializes the Go CGO bridge via `llb_presidio_init(analyzer_url, anonymizer_url)`
+3. Sets `g_initialized = 1` — even if the Go bridge fails (proxy starts without Presidio; scans retry on demand)
 
-### gRPC Endpoints
+**Scan flow (`presidio_scan()`):**
 
-Presidio exposes two gRPC services:
+1. Check `presidio_is_enabled()` — atomic read, 2ns overhead when disabled
+2. Check circuit breaker via `presidio_circuit_breaker_allow_request()`
+3. If circuit open, apply `fail_mode` (FAIL_OPEN bypasses, FAIL_CLOSED blocks)
+4. Truncate body if `content_len > max_body_size` and `scan_mode == PRESIDIO_SCAN_MODE_TRUNCATE`
+5. Call `presidio_scan_with_retry()` with exponential backoff (`retry_backoff_ms * attempt`)
+6. The Go bridge calls `llb_presidio_scan(content, "en", catalog_id)` via gRPC to the Presidio analyzer
+7. If entities are detected above `score_threshold`, the anonymizer applies configured operators (replace, redact, hash, encrypt, mask)
 
-| Service | Default Port | Purpose |
-|---------|-------------|---------|
-| **Presidio Analyzer** | 50051 | Identifies PII entities in text — returns entity types, positions, and confidence scores |
-| **Presidio Anonymizer** | (separate) | Redacts or masks identified PII entities — replaces real data with placeholders |
+**URL pattern matching:**
 
-**Request flow:**
+The module supports OpenAI-style selective detection via URL patterns configured in shared memory:
 
-```
-Request arrives at AI Gateway
-  → sockproxy extracts prompt text
-  → Presidio Analyzer identifies PII entities via gRPC
-  → Presidio Anonymizer redacts entities (if configured)
-  → Clean prompt forwarded to backend LLM
-```
+- `url_mode = 0`: Scan all URLs (default)
+- `url_mode = 1`: Include-list — only scan URLs matching configured patterns
+- `url_mode = 2`: Exclude-list — scan all URLs except those matching patterns
 
-!!! info "Port Allocation"
-    Presidio Analyzer defaults to port **50051**. [LlamaFirewall](llamafirewall.md) uses port **50052** to avoid conflict. If you run both services, verify port assignments.
+Pattern matching uses `fnmatch()` with first-match-wins semantics. Each pattern entry has `enabled` and `is_exclude` flags.
+
+**Body extraction:**
+
+`presidio_should_scan_http()` checks Content-Type before scanning:
+
+- Scans: `application/json`, `text/*`, `application/xml`, `application/x-www-form-urlencoded`
+- Skips: `image/*`, `video/*`, `audio/*`, `application/octet-stream`
+- Bodies smaller than `min_body_size` (default: 100 bytes) are skipped
+- Bodies larger than `max_body_size` (default: 65536 bytes) are either skipped (FULL mode) or truncated (TRUNCATE mode)
+
+### Anonymization Operators
+
+Verified from `sockproxy_presidio.c` operator functions (`presidio_operator_to_string`, `presidio_operator_from_string`):
+
+| Operator | String Value | Description |
+|----------|-------------|-------------|
+| `PRESIDIO_OP_REPLACE` | `"replace"` | Replace PII with entity type label (e.g., `<PERSON>`) |
+| `PRESIDIO_OP_REDACT` | `"redact"` | Remove PII entirely |
+| `PRESIDIO_OP_HASH` | `"hash"` | Replace PII with cryptographic hash |
+| `PRESIDIO_OP_ENCRYPT` | `"encrypt"` | Encrypt PII with configured key |
+| `PRESIDIO_OP_MASK` | `"mask"` | Mask PII with characters (e.g., `****`) |
+
+Per-entity operator configuration is supported via `presidio_operators_t`:
+
+- `default_op` — Applied to all entity types unless overridden
+- `email_op`, `ssn_op`, `credit_card_op`, `phone_op`, `person_op` — Per-entity type overrides
+
+### Statistics Tracking
+
+The module tracks comprehensive statistics via atomic counters (verified from `presidio_get_stats()`):
+
+| Metric | Description |
+|--------|-------------|
+| `requests_scanned` | Total requests scanned |
+| `entities_detected` | Total PII entities found |
+| `requests_masked` | Requests where masking was applied |
+| `scan_errors` | Scan failures (non-timeout, non-connection) |
+| `scan_timeouts` | Timeout errors |
+| `connection_errors` | Connection failures to Presidio |
+| `grpc_errors` | gRPC-level errors |
+| `bytes_scanned` | Total bytes processed |
+| `bytes_masked` | Total bytes after masking |
+| `total_latency_us` | Cumulative scan latency in microseconds |
+| `fail_open_bypasses` | Requests bypassed due to fail-open |
+| `fail_closed_blocks` | Requests blocked due to fail-closed |
+| `circuit_breaker_opens` | Times circuit breaker opened |
+| `circuit_breaker_rejects` | Requests rejected by open circuit |
+| `retry_attempts` | Total retry attempts |
+| `retry_successes` | Retries that succeeded |
+| `bodies_skipped_size` | Bodies skipped due to size limits |
+| `bodies_truncated` | Bodies truncated before scanning |
 
 ## REST API Configuration
 
@@ -95,16 +210,79 @@ curl -X POST http://loxilb:11111/netlox/v1/config/pii/configure \
 
 ### Configuration Field Reference
 
-| Field | Type | Valid Values | Default | Description |
-|-------|------|-------------|---------|-------------|
-| `presidio_url` | string | Any HTTP/HTTPS URL | (required) | Presidio analyzer service endpoint |
-| `score_threshold` | float | `0.0`–`1.0` | `0.7` | Minimum confidence score to flag PII |
-| `entities` | string[] | `"PERSON"`, `"EMAIL_ADDRESS"`, `"PHONE_NUMBER"`, `"CREDIT_CARD"`, etc. | All entities | PII entity types to detect |
-| `action` | string | `"redact"`, `"mask"`, `"log"` | `"redact"` | Action when PII is detected |
-| `direction` | string | `"request"`, `"response"`, `"both"` | `"request"` | Which traffic direction to scan |
+| Field | Type | Valid Values | Default | Source | Description |
+|-------|------|-------------|---------|--------|-------------|
+| `presidio_url` | string | Any HTTP/HTTPS URL | (required) | REST API | Presidio analyzer service endpoint |
+| `analyzer_url` | string | gRPC address | `""` | shared memory | gRPC analyzer endpoint (used by C layer) |
+| `anonymizer_url` | string | gRPC address | `""` | shared memory | gRPC anonymizer endpoint |
+| `score_threshold` | float | `0.0`–`1.0` | `0.7` | shared memory | Minimum confidence score to flag PII |
+| `entities` | string[] | PII entity type names | All entities | REST API | PII entity types to detect |
+| `action` | string | `"replace"`, `"redact"`, `"hash"`, `"encrypt"`, `"mask"` | `"replace"` | REST API / C layer | Anonymization operator |
+| `direction` | uint8 | `0`=request, `1`=response, `2`=both | `0` (request) | shared memory | Which traffic direction to scan |
+| `mode` | uint8 | Mode identifier | `0` | shared memory | Detection mode |
+| `fail_mode` | uint8 | `FAIL_OPEN` (0), `FAIL_CLOSED` (1) | `FAIL_OPEN` | shared memory | Behavior when Presidio is unreachable |
+| `min_body_size` | uint32 | bytes | `100` | shared memory | Minimum body size to scan |
+| `max_body_size` | uint32 | bytes | `65536` | shared memory | Maximum body size to scan |
+| `scan_mode` | uint8 | `FULL` (0), `TRUNCATE` (1) | `FULL` | shared memory | Behavior for oversized bodies |
+| `timeout_ms` | uint32 | milliseconds | configured | shared memory | gRPC call timeout |
+| `max_retries` | uint32 | count | `1` | shared memory | Retry attempts on scan failure |
+| `retry_backoff_ms` | uint32 | milliseconds | `100` | shared memory | Base backoff between retries (exponential) |
 
-!!! note "Configuration update behavior"
-    Configuration updates take effect on the next request cycle, not mid-request. For production configuration changes during high traffic, deploy during a maintenance window or low-traffic period to avoid brief gaps in PII detection.
+## Configuration Scenarios
+
+### Scenario 1: Strict PII Protection (Fail-Closed)
+
+Block all requests containing PII above threshold. Scan both requests and responses. Deny traffic if Presidio is unreachable.
+
+```bash
+# Enable PII detection
+curl -X POST http://loxilb:11111/netlox/v1/config/pii/enable \
+  -H "Authorization: Bearer <token>"
+
+# Configure strict mode
+curl -X POST http://loxilb:11111/netlox/v1/config/pii/configure \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "presidio_url": "http://presidio-analyzer:5002",
+    "score_threshold": 0.5,
+    "entities": ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD", "US_SSN", "IBAN_CODE"],
+    "action": "redact",
+    "direction": "both",
+    "fail_mode": "fail_closed"
+  }'
+```
+
+**Key settings:** Lower `score_threshold` (0.5) catches more potential PII. `direction: "both"` scans responses as well as requests. `fail_mode: fail_closed` blocks traffic if Presidio goes down.
+
+**When to use:** GDPR/CCPA-mandated deployments where PII must never reach LLM backends.
+
+### Scenario 2: Audit/Compliance Mode (Fail-Open)
+
+Log PII detections without blocking. Lower threshold for broad detection coverage. Allow traffic through if Presidio is unavailable.
+
+```bash
+# Enable PII detection
+curl -X POST http://loxilb:11111/netlox/v1/config/pii/enable \
+  -H "Authorization: Bearer <token>"
+
+# Configure audit mode
+curl -X POST http://loxilb:11111/netlox/v1/config/pii/configure \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "presidio_url": "http://presidio-analyzer:5002",
+    "score_threshold": 0.3,
+    "entities": ["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD", "US_SSN", "LOCATION"],
+    "action": "log",
+    "direction": "request",
+    "fail_mode": "fail_open"
+  }'
+```
+
+**Key settings:** Very low `score_threshold` (0.3) for maximum detection sensitivity. `action: "log"` records PII detections without modifying traffic. `fail_mode: fail_open` preserves availability.
+
+**When to use:** Initial deployment, compliance auditing, or environments where you need visibility into PII exposure before enforcing blocking.
 
 ## Deployment
 
@@ -118,7 +296,7 @@ docker run -d --name presidio-analyzer \
   -p 50051:50051 \
   mcr.microsoft.com/presidio-analyzer:latest
 
-# Run Presidio Anonymizer (optional — only needed for redaction)
+# Run Presidio Anonymizer (required for redaction/masking)
 docker run -d --name presidio-anonymizer \
   -p 50052:50052 \
   mcr.microsoft.com/presidio-anonymizer:latest
@@ -128,13 +306,9 @@ docker run -d --name presidio-anonymizer \
 
 In Kubernetes, deploy Presidio as a sidecar or separate service:
 
-**Shared memory requirement:** `/dev/shm` must be accessible from both the loxilb pod and Presidio pods. Options:
-
-- **hostPath volume** — Mount `/dev/shm` from the host (simplest, single-node)
-- **emptyDir with medium: Memory** — Kubernetes-native shared memory between containers in the same pod
+**Shared memory requirement:** `/dev/shm` must be accessible from both the loxilb pod and Presidio pods:
 
 ```yaml
-# Example: Shared memory volume in pod spec
 volumes:
   - name: shared-memory
     emptyDir:
@@ -142,34 +316,7 @@ volumes:
       sizeLimit: 64Mi
 ```
 
-## Integration with AI Gateway
-
-Presidio operates as part of the AI Gateway's security enforcement stack:
-
-1. **API key validation** — Is the key valid?
-2. **Rate limiting** — Is the request within quota?
-3. **Presidio PII scan** — Does the prompt contain sensitive data?
-4. **LlamaFirewall scan** — Does the prompt contain security threats?
-5. **Endpoint selection** — Route to the appropriate backend
-
-Together, Presidio and LlamaFirewall provide **two layers of content protection** before any prompt reaches a backend LLM.
-
-For the full AI Gateway traffic flow, see [AI Gateway Overview](../ai-gateway/overview.md).
-
-## GDPR/CCPA Compliance Context
-
-Gateway-layer PII interception serves as a **technical control for data minimization** — a core principle of both GDPR and CCPA. By detecting and redacting PII at the gateway layer:
-
-- **Sensitive data never reaches LLM backends** — which may log prompts, store them for debugging, or use them for model training.
-- **One enforcement point for all traffic** — rather than requiring each application to implement its own PII scanning.
-- **Auditable interception** — PII detection events can be logged for compliance reporting.
-
-!!! note "Compliance Advisory"
-    Gateway-layer PII detection is a **technical control**, not a complete compliance solution. GDPR and CCPA compliance requires a broader program including data inventory, consent management, data subject rights processes, and legal review. Consult your legal team for full compliance requirements.
-
 ## Verify
-
-Confirm PII detection is enabled and configured:
 
 ```bash
 curl http://loxilb:11111/netlox/v1/config/pii/status \
@@ -185,21 +332,20 @@ curl http://loxilb:11111/netlox/v1/config/pii/status \
 # }
 ```
 
-Check that `enabled` is `true` and configuration values match your intended settings.
-
 ## Troubleshoot
 
 | Symptom | Likely Cause | Resolution |
 |---------|-------------|------------|
-| PII not detected | Entity types not included in `entities` list, or `score_threshold` too high | Verify `entities` list includes target PII types; lower `score_threshold` if needed |
-| Presidio connection failed | `presidio_url` incorrect or analyzer service not running | Check `presidio_url` value; verify Presidio analyzer container is running on the expected port |
-| High false positive rate | `score_threshold` too low | Increase `score_threshold` (e.g., from 0.5 to 0.7) to reduce false positives |
+| PII not detected | Entity types not in `entities` list, or `score_threshold` too high | Verify `entities` list; lower `score_threshold` |
+| Presidio connection failed | `presidio_url` incorrect or service not running | Check container status; verify port connectivity |
+| High false positive rate | `score_threshold` too low | Increase from 0.3 to 0.7+ |
+| Large request bodies skipped | `max_body_size` too small | Increase `max_body_size` or set `scan_mode` to TRUNCATE |
+| Circuit breaker open | Presidio service unstable | Check Presidio health; circuit recovers after `circuit_breaker_timeout_sec` |
 
 ## See Also
 
 - [PII Detection (Presidio) API Reference](../reference/api.md#pii-detection-presidio)
-- [Security Gateway Overview](overview.md) — Fail-mode comparison table, port allocation for all security services
-- [LlamaFirewall](llamafirewall.md) — Complementary semantic AI content safety (uses port 50052, Presidio uses 50051)
-- [AI Gateway Overview](../ai-gateway/overview.md) — Full traffic flow and architecture
-- [Rate Limiting](rate-limiting.md) — Rate limiting configuration
+- [Security Gateway Overview](overview.md) — Full architecture diagram, fail-mode comparison, circuit breaker configuration
+- [LlamaFirewall](llamafirewall.md) — Complementary semantic AI content safety
+- [AI Gateway Overview](../ai-gateway/overview.md) — Full traffic flow and pipeline position
 - [Configuration Reference](configuration-reference.md) — Quick-reference for all Security Gateway config fields

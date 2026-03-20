@@ -8,28 +8,197 @@
 
 LlamaFirewall is Meta's open-source AI safety framework that inspects LLM prompts and responses for security threats. loxilb integrates LlamaFirewall as an **inline scanner in the AI Gateway traffic path** — every request passes through LlamaFirewall before reaching the backend LLM, and every response is scanned before being returned to the client.
 
-In the AI Gateway pipeline, LlamaFirewall sits **after API key validation and rate limiting, but before endpoint selection**. This means malicious prompts are blocked before they consume GPU resources, and unsafe responses are caught before reaching the client.
+In the AI Gateway pipeline, LlamaFirewall sits **after Presidio PII masking but before endpoint selection**. This architecture means: Presidio masks PII first, then LlamaFirewall blocks attacks, then the backend processes safe content. Malicious prompts are blocked before they consume GPU resources, and unsafe responses are caught before reaching the client.
+
+## LlamaFirewall Evaluation Path
+
+The following sequence diagram shows the exact evaluation path from request arrival through content scanning to enforcement:
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant SP as sockproxy_http.c
+    participant LF as sockproxy_llamafirewall.c
+    participant CB as Circuit Breaker
+    participant Go as Go CGO Bridge
+    participant GS as LlamaFirewall gRPC<br/>Server (:50052)
+
+    Client->>SP: HTTP POST /v1/chat/completions
+    Note over SP: After Presidio PII masking<br/>(if enabled)
+
+    SP->>SP: Check HAVE_LLAMAFIREWALL<br/>and llamafirewall_is_initialized()
+
+    alt LlamaFirewall not initialized
+        SP->>SP: Skip scan, forward to backend
+    else LlamaFirewall initialized
+        SP->>SP: Determine scan content
+        alt PII masking was applied
+            SP->>SP: Use pii_masked_text (masked content)
+        else No PII masking
+            SP->>SP: Use original body content
+        end
+
+        SP->>LF: sockproxy_llamafirewall_scan_request(method, path, body)
+        LF->>LF: Check enabled flag
+        LF->>CB: llamafirewall_circuit_breaker_allow_request()
+
+        alt Circuit OPEN
+            CB-->>LF: Rejected
+            alt fail_closed = 1
+                LF-->>SP: DECISION_BLOCK (circuit breaker, fail-closed)
+                SP->>Client: 403 Forbidden
+            else fail_closed = 0
+                LF-->>SP: DECISION_ALLOW (circuit breaker, fail-open)
+                SP->>SP: Forward to backend (bypass scan)
+            end
+        else Circuit CLOSED or HALF_OPEN
+            CB-->>LF: Allowed
+            LF->>LF: Combine: "METHOD PATH\nBODY"
+            LF->>Go: llb_llamafirewall_scan(content, ROLE_USER, "prompt_guard,regex")
+            Go->>GS: gRPC ScanRequest
+            GS-->>Go: ScanResponse (decision, score, reason)
+            Go-->>LF: security_scan_result_t
+
+            alt scan failed (ret != 0)
+                LF->>CB: record_failure()
+                alt fail_closed
+                    LF-->>SP: DECISION_BLOCK
+                    SP->>Client: 403 Forbidden
+                else fail_open
+                    LF-->>SP: DECISION_ALLOW (bypass)
+                end
+            else scan succeeded
+                LF->>CB: record_success()
+                LF->>LF: sockproxy_llamafirewall_should_block()
+                alt decision=BLOCK or score >= block_threshold
+                    LF-->>SP: DECISION_BLOCK
+                    SP->>Client: 403 + X-LlamaFirewall-Decision: BLOCK
+                else decision=ALLOW
+                    LF-->>SP: DECISION_ALLOW
+                    SP->>SP: Forward to backend
+                end
+            end
+        end
+    end
+```
+
+### Response Scanning
+
+Response scanning uses a separate scanner set. Verified from `sockproxy_llamafirewall_scan_response()`:
+
+- **Request scanning** (ROLE_USER): Uses `"prompt_guard,regex"` scanners — detects prompt injection and credential leakage
+- **Response scanning** (ROLE_ASSISTANT): Uses `"code_shield,regex"` scanners — detects insecure generated code and credential leakage
 
 ## Threat Model
 
-Understanding what threats LlamaFirewall protects against is essential before configuring it. The following table maps each threat to its scanner:
+Understanding what threats LlamaFirewall protects against is essential before configuring it. Each scanner targets a specific threat vector:
 
-| Threat | Scanner | Description |
-|--------|---------|-------------|
-| **Prompt injection** | prompt-injection | Detects attempts to override system prompts or inject malicious instructions that manipulate LLM behavior |
-| **Insecure code generation** | code-shield | Identifies generated code with known vulnerabilities — SQL injection, XSS, buffer overflows, hardcoded credentials |
-| **Credential leakage** | regex | Detects API keys, passwords, access tokens, and secrets in prompts and responses via configurable regex patterns |
-| **Hidden character attacks** | hidden-ascii | Detects invisible Unicode characters (zero-width spaces, RTL overrides) used to smuggle instructions past human review |
-| **Agent misalignment** | agent-alignment | Monitors AI agent actions for deviation from intended behavior — detects when agents attempt unauthorized operations (off by default) |
-| **PII exposure** | pii-detection | Detects personally identifiable information in prompts and responses (off by default — use [Presidio](presidio-pii-detection.md) for dedicated PII detection) |
+| Threat | Scanner | Scan String | Description |
+|--------|---------|-------------|-------------|
+| **Prompt injection** | `prompt_guard` (PromptGuard) | `SCANNER_PROMPT_GUARD` | Detects attempts to override system prompts or inject malicious instructions |
+| **Insecure code generation** | `code_shield` (CodeShield) | `SCANNER_CODE_SHIELD` | Identifies generated code with SQL injection, XSS, buffer overflows, hardcoded credentials |
+| **Credential leakage** | `regex` (Regex) | `SCANNER_REGEX` | Detects API keys, passwords, access tokens via configurable regex patterns |
+| **Hidden character attacks** | `hidden_ascii` (HiddenASCII) | `SCANNER_HIDDEN_ASCII` | Detects invisible Unicode characters (zero-width spaces, RTL overrides) |
+| **Agent misalignment** | `agent_alignment` (AgentAlignment) | `SCANNER_AGENT_ALIGNMENT` | Monitors AI agent actions for unauthorized operations (off by default) |
+| **PII exposure** | `pii_detection` (PII) | `SCANNER_PII_DETECTION` | Semantic PII detection (off by default — use [Presidio](presidio-pii-detection.md) instead) |
 
-## Scanner Configuration
+**Default enabled:** prompt_guard, code_shield, regex, hidden_ascii
 
-**Default enabled:** prompt-injection, code-shield, regex, hidden-ascii
+**Default disabled:** agent_alignment, pii_detection
 
-**Default disabled:** agent-alignment, pii-detection
+## Deep Internals
 
-**Why is pii-detection off by default?** [Presidio](presidio-pii-detection.md) provides more comprehensive **structural** PII detection (names, emails, credit cards, SSNs) using pattern matching and Named Entity Recognition (NER) models. LlamaFirewall's pii-detection is **semantic/context-based** — it understands intent rather than patterns. For defense-in-depth, enable both: Presidio catches structural PII patterns, LlamaFirewall catches contextual PII exposure.
+### C-Layer Implementation (sockproxy_llamafirewall.c)
+
+The LlamaFirewall integration is implemented in `sockproxy_llamafirewall.c` (621 lines). Key implementation details verified from source:
+
+**Global configuration structure (`llamafirewall_config_t`):**
+
+| Field | Type | Default | Source Verification |
+|-------|------|---------|-------------------|
+| `server_url` | char[] | `LLAMAFIREWALL_DEFAULT_SERVER` | `g_llamafirewall_config` initialization |
+| `enabled` | int | `0` (disabled) | Must call `sockproxy_llamafirewall_init()` |
+| `fail_closed` | int | `0` (fail-open) | Configurable via REST API |
+| `scanner_mask` | uint32 | `LLAMAFIREWALL_DEFAULT_SCANNERS` | Bitmask of enabled scanners |
+| `block_threshold` | float | `LLAMAFIREWALL_DEFAULT_THRESHOLD` | Score >= threshold triggers block |
+
+**Scan request construction:**
+
+The `sockproxy_llamafirewall_scan_request()` function combines method, path, and body into a single content string:
+
+```c
+char content[8192];
+snprintf(content, sizeof(content), "%s %s\n%s",
+         method ? method : "UNKNOWN",
+         path ? path : "/",
+         body ? body : "");
+```
+
+This 8192-byte buffer is the maximum content size that can be scanned in a single call. Larger bodies are truncated silently.
+
+**Decision logic (`sockproxy_llamafirewall_should_block()`):**
+
+A request is blocked if either:
+
+1. `result->decision == DECISION_BLOCK` — The scanner explicitly blocks
+2. `result->score >= g_llamafirewall_config.block_threshold` — The confidence score exceeds the threshold
+
+**Decision values** (verified from `sockproxy_llamafirewall_decision_str()`):
+
+| Value | Constant | Meaning |
+|-------|----------|---------|
+| `0` | `DECISION_UNSPECIFIED` | No decision made |
+| `1` | `DECISION_ALLOW` | Content is safe |
+| `2` | `DECISION_BLOCK` | Content is blocked |
+| `3` | `DECISION_HUMAN_IN_THE_LOOP` | Flagged for human review (future) |
+
+**HTTP response on block** (verified from sockproxy_http.c, line ~4765):
+
+When LlamaFirewall blocks a request, the proxy sends:
+
+```
+HTTP/1.1 403 Forbidden
+X-LlamaFirewall-Decision: BLOCK
+Content-Type: application/json
+
+{"error":"Request blocked by LlamaFirewall","reason":"Security threat detected"}
+```
+
+### Circuit Breaker (Following Presidio Pattern)
+
+LlamaFirewall implements an identical circuit breaker pattern to Presidio. Both use shared memory configuration for:
+
+| Parameter | Field | Default |
+|-----------|-------|---------|
+| Failure threshold | `circuit_breaker_threshold` | `5` consecutive failures |
+| Recovery timeout | `circuit_breaker_timeout_sec` | `60` seconds |
+| Success threshold | `circuit_breaker_success_threshold` | `3` consecutive successes in HALF_OPEN |
+
+### Statistics Tracking
+
+Verified from `llamafirewall_stats_t` and `llamafirewall_get_stats()`:
+
+| Metric | Description |
+|--------|-------------|
+| `requests_scanned` | Total requests scanned |
+| `bytes_scanned` | Total bytes processed |
+| `threats_detected` | Threats found (decision=BLOCK) |
+| `requests_blocked` | Requests blocked |
+| `scan_errors` | Scan failures |
+| `fail_open_bypasses` | Requests bypassed due to fail-open |
+| `fail_closed_blocks` | Requests blocked due to fail-closed |
+| `circuit_breaker_opens` | Times circuit breaker opened |
+| `circuit_breaker_rejects` | Requests rejected by open circuit |
+
+### Integration in the Security Pipeline (sockproxy_http.c)
+
+LlamaFirewall scanning occurs at line ~4700 in sockproxy_http.c, **after** Presidio PII masking:
+
+1. Check if `HAVE_LLAMAFIREWALL` is compiled in and `llamafirewall_is_initialized()` returns true
+2. Determine scan content: if `ent->pii_masked_text` exists, use the PII-masked version; otherwise use the original body
+3. Call `sockproxy_llamafirewall_scan_request(method, path, scan_content, &scan_result)`
+4. If `sockproxy_llamafirewall_should_block(&scan_result)` returns true: send 403 with `X-LlamaFirewall-Decision: BLOCK` header, shut down the connection
+5. If allowed: continue to endpoint selection and backend forwarding
 
 ## REST API Configuration
 
@@ -51,10 +220,10 @@ curl -X POST http://loxilb:11111/netlox/v1/config/llamafirewall/scanners \
   -d '{
     "scanners": [
       {"name": "prompt-injection", "enabled": true, "threshold": 0.8},
-      {"name": "content-filter", "enabled": true, "categories": ["violence", "hate"]},
       {"name": "code-shield", "enabled": true},
       {"name": "regex", "enabled": true},
-      {"name": "hidden-ascii", "enabled": true}
+      {"name": "hidden-ascii", "enabled": true},
+      {"name": "agent-alignment", "enabled": false}
     ]
   }'
 
@@ -67,102 +236,92 @@ curl -X POST http://loxilb:11111/netlox/v1/config/llamafirewall/scanners \
 |-------|------|-------------|---------|-------------|
 | `name` | string | Scanner name (see Threat Model table) | (required) | Scanner identifier |
 | `enabled` | bool | `true`, `false` | varies by scanner | Whether the scanner is active |
-| `threshold` | float | `0.0`–`1.0` | `0.9` | Confidence score threshold for blocking |
-| `fail_action` | string | `"block"`, `"allow"` | `"allow"` | Action when scanner encounters an error |
+| `threshold` | float | `0.0`–`1.0` | `0.9` | Confidence threshold for blocking |
+| `fail_action` | string | `"block"`, `"allow"` | `"allow"` | Action on scanner error |
 
-## Fail-Open vs Fail-Closed
+## Configuration Scenarios
 
-!!! danger "Security Critical: Default is Fail-Open"
-    By default, when the LlamaFirewall gRPC service is unreachable (network issue, service crash, timeout), loxilb **allows all traffic through**.
+### Scenario 1: Full Content Safety (Block All Threats)
 
-    For security-sensitive deployments, configure fail-closed behavior. This blocks all traffic when LlamaFirewall is unavailable — safer but causes availability impact if the LlamaFirewall service goes down.
+Enable all scanners with fail-closed behavior. Every threat type is scanned, and any violation blocks the request. The gateway blocks traffic if LlamaFirewall is unreachable.
 
-**Choosing fail-open vs fail-closed:**
+```bash
+# Enable LlamaFirewall
+curl -X POST http://loxilb:11111/netlox/v1/config/llamafirewall/enable \
+  -H "Authorization: Bearer <token>"
 
-| Mode | When Traffic Flows | When LlamaFirewall Down | Best For |
-|------|-------------------|------------------------|----------|
-| **Fail-open** (default) | Always, unless scan explicitly blocks | Traffic allowed unscanned | Availability-first deployments |
-| **Fail-closed** | Only when scan passes | All traffic blocked | Security-first deployments, compliance requirements |
+# Configure all scanners with strict settings
+curl -X POST http://loxilb:11111/netlox/v1/config/llamafirewall/scanners \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scanners": [
+      {"name": "prompt-injection", "enabled": true, "threshold": 0.7},
+      {"name": "code-shield", "enabled": true, "threshold": 0.8},
+      {"name": "regex", "enabled": true},
+      {"name": "hidden-ascii", "enabled": true},
+      {"name": "agent-alignment", "enabled": true, "threshold": 0.9},
+      {"name": "pii-detection", "enabled": true, "threshold": 0.8}
+    ],
+    "fail_closed": true
+  }'
+```
 
-## Response Processing
+**Key settings:** All 6 scanners enabled. Lower `threshold` (0.7) for prompt injection to catch more attacks. `fail_closed: true` blocks all traffic when LlamaFirewall is down.
 
-When LlamaFirewall scans a request, it returns a scan result:
+**When to use:** Production AI deployments handling sensitive data where security is paramount. Combine with Presidio for defense-in-depth PII protection.
 
-| Field | Values | Description |
-|-------|--------|-------------|
-| `decision` | `0` = unspecified, `1` = allow, `2` = block, `3` = HITL | Scan verdict |
-| `reason` | string | Human-readable explanation of the verdict |
-| `score` | `0.0` to `1.0` | Confidence score |
+### Scenario 2: Prompt Injection Only (Focused Protection)
 
-- **Block threshold:** `0.9` (default). Scores at or above this threshold result in a block decision.
-- **HITL (Human-in-the-Loop):** Decision value `3` is intended for future manual review workflows where borderline content is flagged for human review rather than automatically blocked.
+Enable only the prompt injection scanner. Log other violations without blocking. Allow traffic if LlamaFirewall is unavailable.
+
+```bash
+# Enable LlamaFirewall
+curl -X POST http://loxilb:11111/netlox/v1/config/llamafirewall/enable \
+  -H "Authorization: Bearer <token>"
+
+# Configure focused protection
+curl -X POST http://loxilb:11111/netlox/v1/config/llamafirewall/scanners \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "scanners": [
+      {"name": "prompt-injection", "enabled": true, "threshold": 0.9},
+      {"name": "code-shield", "enabled": false},
+      {"name": "regex", "enabled": true, "fail_action": "allow"},
+      {"name": "hidden-ascii", "enabled": false},
+      {"name": "agent-alignment", "enabled": false}
+    ],
+    "fail_closed": false
+  }'
+```
+
+**Key settings:** Only prompt injection and regex (credential leak) scanners enabled. Higher `threshold` (0.9) reduces false positives. `fail_closed: false` preserves availability.
+
+**When to use:** Initial deployment where you want to protect against the most critical threat (prompt injection) while minimizing latency impact from scanning.
 
 ## Deployment
 
-LlamaFirewall runs as a **separate gRPC service** — it is not embedded in the loxilb process. This allows independent scaling and updates.
+LlamaFirewall runs as a **separate gRPC service** — not embedded in the loxilb process.
 
-**Setup steps:**
-
-1. **Run LlamaFirewall service** — Pull the LlamaFirewall container and start the gRPC server:
-
-    ```bash
-    # Example: Run LlamaFirewall on port 50052
-    docker run -d --name llamafirewall \
-      -p 50052:50052 \
-      meta-llama/llamafirewall:latest
-    ```
-
-2. **Configure loxilb connection** — Set the server URL to the LlamaFirewall address:
-    - Same host: `"localhost:50052"`
-    - Remote: `"llamafirewall.service.local:50052"`
-
-3. **Verify connectivity** — Check that loxilb can reach the gRPC endpoint. LlamaFirewall logs will show incoming scan requests.
+```bash
+# Run LlamaFirewall on port 50052
+docker run -d --name llamafirewall \
+  -p 50052:50052 \
+  meta-llama/llamafirewall:latest
+```
 
 !!! info "Port Allocation"
     LlamaFirewall defaults to port **50052** (not 50051). Port 50051 is reserved for [Presidio](presidio-pii-detection.md). If you run both services, ensure they use different ports.
 
-## Integration with AI Gateway
-
-LlamaFirewall is part of the AI Gateway enforcement pipeline:
-
-```
-Client request
-  → API key validation
-  → Rate limit check
-  → LlamaFirewall scan    ← HERE
-  → Endpoint selection and forwarding
-  → Backend vLLM processes request
-  → Response returned to client
-```
-
-**Caching:** When caching is enabled, scan results for identical prompts are cached for 5 minutes. This significantly reduces latency for repeated queries (e.g., multiple users asking the same question) without re-scanning.
-
-For the full AI Gateway traffic flow, see [AI Gateway Overview](../ai-gateway/overview.md).
-
 ## Verify
 
-Confirm LlamaFirewall is enabled and scanners are active:
-
 ```bash
+# Check LlamaFirewall status
 curl http://loxilb:11111/netlox/v1/config/llamafirewall/status \
   -H "Authorization: Bearer <token>"
 
-# Response (200):
-# {
-#   "enabled": true,
-#   "scanners": [
-#     {"name": "prompt-injection", "enabled": true, "threshold": 0.8},
-#     {"name": "content-filter", "enabled": true}
-#   ],
-#   "health": "healthy"
-# }
-```
-
-Check that `enabled` is `true`, expected scanners are listed, and `health` is `"healthy"`.
-
-You can also check scanning statistics:
-
-```bash
+# Check scanning statistics
 curl http://loxilb:11111/netlox/v1/config/llamafirewall/stats \
   -H "Authorization: Bearer <token>"
 
@@ -173,7 +332,7 @@ curl http://loxilb:11111/netlox/v1/config/llamafirewall/stats \
 #   "passed": 15397,
 #   "by_scanner": {
 #     "prompt-injection": {"scanned": 15420, "blocked": 12},
-#     "content-filter": {"scanned": 15420, "blocked": 11}
+#     "regex": {"scanned": 15420, "blocked": 11}
 #   }
 # }
 ```
@@ -182,15 +341,16 @@ curl http://loxilb:11111/netlox/v1/config/llamafirewall/stats \
 
 | Symptom | Likely Cause | Resolution |
 |---------|-------------|------------|
-| Scanners not detecting threats | Scanner `enabled` is `false` or `threshold` too high | Verify scanner configuration via `GET /config/llamafirewall/status`; lower `threshold` if needed |
-| High latency from scanning | Too many scanners enabled or large prompt payloads | Disable unused scanners; check LlamaFirewall service resource allocation |
-| LlamaFirewall health "unhealthy" | gRPC service not reachable or crashed | Check LlamaFirewall container status; verify network connectivity to port 50052 |
+| Scanners not detecting threats | Scanner `enabled` is false or `threshold` too high | Check scanner config; lower `threshold` |
+| High latency | Too many scanners or large payloads | Disable unused scanners; check resource allocation |
+| LlamaFirewall health "unhealthy" | gRPC service unreachable or crashed | Check container status; verify port 50052 connectivity |
+| Circuit breaker open | LlamaFirewall service unstable | Check service health; circuit auto-recovers after timeout |
+| 403 with no threat details | `fail_closed: true` and circuit breaker open | Check circuit breaker state; fix LlamaFirewall service |
 
 ## See Also
 
 - [LlamaFirewall API Reference](../reference/api.md#llamafirewall)
-- [Security Gateway Overview](overview.md) — Fail-mode comparison table showing LlamaFirewall fail-open vs OPA fail-closed defaults. See also the [port allocation table](overview.md#port-allocation) — LlamaFirewall uses port 50052, Presidio uses port 50051.
-- [PII Detection with Presidio](presidio-pii-detection.md) — Complementary structural PII detection. Presidio catches formatted PII (emails, SSNs), LlamaFirewall catches contextual PII exposure.
-- [AI Gateway Overview](../ai-gateway/overview.md) — Full traffic flow diagram showing LlamaFirewall position in the enforcement pipeline
-- [Rate Limiting](rate-limiting.md) — Rate limiting configuration
+- [Security Gateway Overview](overview.md) — Full architecture diagram, fail-mode comparison, circuit breaker configuration
+- [PII Detection with Presidio](presidio-pii-detection.md) — Complementary structural PII detection
+- [AI Gateway Overview](../ai-gateway/overview.md) — Full traffic flow showing LlamaFirewall position in pipeline
 - [Configuration Reference](configuration-reference.md) — Quick-reference for all Security Gateway config fields
