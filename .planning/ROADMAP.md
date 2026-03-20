@@ -42,7 +42,7 @@
 
 - [x] **Phase 9: AI Gateway Enhancement** — 7 pages elevated to reference quality with Mermaid diagrams, source-verified fields, and deep internals (completed 2026-03-20)
 - [x] **Phase 10: Security Gateway Enhancement (Part 1)** — 6 pages (overview + threat detection stack) elevated to reference quality (completed 2026-03-20)
-- [ ] **Phase 11: Security Gateway Enhancement (Part 2)** — 6 pages (transport security + deployment) elevated to reference quality
+- [x] **Phase 11: Security Gateway Enhancement (Part 2)** — 6 pages (transport security + deployment) elevated to reference quality (completed 2026-03-20)
 - [ ] **Phase 12: Network Gateway Enhancement** — 7 pages elevated to reference quality with Mermaid diagrams and source-verified fields
 
 ## Phase Details
@@ -92,9 +92,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 11-01: Enhance mTLS and SYN flood protection
-- [ ] 11-02: Enhance IP filtering and secure dataplane
-- [ ] 11-03: Enhance deployment scenarios and Security Gateway configuration reference
+- [x] 11-01: Enhance mTLS and SYN flood protection
+- [x] 11-02: Enhance IP filtering and secure dataplane
+- [x] 11-03: Enhance deployment scenarios and Security Gateway configuration reference
 
 ### Phase 12: Network Gateway Enhancement
 **Goal**: All 7 Network Gateway pages reach reference quality — Mermaid diagrams showing data-plane forwarding paths, source-verified config fields from sockproxy_ssl.c and sockproxy_h2.c, and scenario-based deployment options
@@ -129,5 +129,5 @@ Phases 9-12 are independent and can execute concurrently. Recommended order if s
 | 8. Network Gateway API Enhancement | v1.1 | 3/3 | Complete | 2026-03-18 |
 | 9. AI Gateway Enhancement | v1.2 | 3/3 | Complete | 2026-03-20 |
 | 10. Security Gateway Enhancement (Part 1) | v1.2 | 3/3 | Complete | 2026-03-20 |
-| 11. Security Gateway Enhancement (Part 2) | v1.2 | 0/3 | Not started | - |
+| 11. Security Gateway Enhancement (Part 2) | v1.2 | 3/3 | Complete | 2026-03-20 |
 | 12. Network Gateway Enhancement | v1.2 | 0/3 | Not started | - |
