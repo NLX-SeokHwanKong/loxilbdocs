@@ -76,9 +76,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 10-01: Enhance Security Gateway overview and OPA policy enforcement
-- [ ] 10-02: Enhance Presidio PII detection and LlamaFirewall
-- [ ] 10-03: Enhance rate limiting and IPsec
+- [x] 10-01: Enhance Security Gateway overview and OPA policy enforcement
+- [x] 10-02: Enhance Presidio PII detection and LlamaFirewall
+- [x] 10-03: Enhance rate limiting and IPsec
 
 ### Phase 11: Security Gateway Enhancement (Part 2)
 **Goal**: The remaining 6 Security Gateway pages — mTLS, SYN flood protection, IP filtering, secure dataplane, deployment scenarios, and configuration reference — reach reference quality with Mermaid diagrams, source-verified fields, and deep internals
@@ -128,6 +128,6 @@ Phases 9-12 are independent and can execute concurrently. Recommended order if s
 | 7. Security Gateway API Enhancement | v1.1 | 3/3 | Complete | 2026-03-18 |
 | 8. Network Gateway API Enhancement | v1.1 | 3/3 | Complete | 2026-03-18 |
 | 9. AI Gateway Enhancement | v1.2 | 3/3 | Complete | 2026-03-20 |
-| 10. Security Gateway Enhancement (Part 1) | v1.2 | 0/3 | Not started | - |
+| 10. Security Gateway Enhancement (Part 1) | v1.2 | 3/3 | Complete | 2026-03-20 |
 | 11. Security Gateway Enhancement (Part 2) | v1.2 | 0/3 | Not started | - |
 | 12. Network Gateway Enhancement | v1.2 | 0/3 | Not started | - |
