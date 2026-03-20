@@ -108,9 +108,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 12-01: Enhance Network Gateway overview, egress LB, and DSR
-- [ ] 12-02: Enhance NAT64, HTTPS proxy, and HTTP2 proxy
-- [ ] 12-03: Enhance SCTP multihoming
+- [x] 12-01: Enhance Network Gateway overview, egress LB, and DSR
+- [x] 12-02: Enhance NAT64, HTTPS proxy, and HTTP2 proxy
+- [x] 12-03: Enhance SCTP multihoming
 
 ## Progress
 
@@ -130,4 +130,4 @@ Phases 9-12 are independent and can execute concurrently. Recommended order if s
 | 9. AI Gateway Enhancement | v1.2 | 3/3 | Complete | 2026-03-20 |
 | 10. Security Gateway Enhancement (Part 1) | v1.2 | 3/3 | Complete | 2026-03-20 |
 | 11. Security Gateway Enhancement (Part 2) | v1.2 | 3/3 | Complete | 2026-03-20 |
-| 12. Network Gateway Enhancement | 3/3 | Complete   | 2026-03-20 | - |
+| 12. Network Gateway Enhancement | v1.2 | 3/3 | Complete | 2026-03-20 |
