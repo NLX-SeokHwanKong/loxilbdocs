@@ -84,7 +84,7 @@ graph TB
     style SEC fill:#00bfa5,color:#fff
     style NET fill:#2962ff,color:#fff
     style CP fill:#ff6d00,color:#fff
-    style DP fill:#263238,color:#fff
+    style DP fill:#e8eaf6,stroke:#3949ab,stroke-width:2px,color:#1a237e
 ```
 
 **Key architectural properties:**
