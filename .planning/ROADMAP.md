@@ -73,7 +73,7 @@ Plans:
   2. Every policy enforcement page (OPA, Presidio, LlamaFirewall) has a sequence diagram showing the exact evaluation path from request arrival to policy decision
   3. All config fields for OPA, Presidio, LlamaFirewall, and rate limiting are verified against their respective sockproxy_*.c source files — no invented field names
   4. Each page offers at least two configuration scenarios (e.g., strict vs. permissive policy, per-key vs. per-tenant rate limiting)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 10-01: Enhance Security Gateway overview and OPA policy enforcement
