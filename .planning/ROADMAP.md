@@ -89,7 +89,7 @@ Plans:
   2. deployment-scenarios.md presents multiple complete reference architectures as Mermaid diagrams — operators can choose a topology and see the exact API config for it
   3. All config fields for mTLS, SYN flood, and IP filtering are verified against source — defaults and valid ranges match implementation
   4. configuration-reference.md is a complete field reference for all Security Gateway config verified against swagger.yml
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 11-01: Enhance mTLS and SYN flood protection
@@ -105,7 +105,7 @@ Plans:
   2. Every Network Gateway page has a Mermaid diagram showing the packet/connection forwarding path for that specific feature
   3. https-proxy.md and http2-proxy.md config fields are verified against sockproxy_ssl.c and sockproxy_h2.c respectively — TLS termination details, cipher suites, and connection upgrade behavior match implementation
   4. Each Network Gateway feature page offers at least two deployment configurations with distinct use-case framing (e.g., egress LB for east-west vs. north-south traffic)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
 - [ ] 12-01: Enhance Network Gateway overview, egress LB, and DSR
