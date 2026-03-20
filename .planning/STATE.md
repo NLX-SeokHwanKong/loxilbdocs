@@ -1,49 +1,61 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Practical API Enhancement
-status: complete
-last_updated: "2026-03-18T05:30:00.000Z"
+milestone: v1.2
+milestone_name: Source-Verified Documentation Enhancement
+status: executing
+last_updated: "2026-03-20T12:00:00.000Z"
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 28
-  completed_plans: 28
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 12
+  completed_plans: 1
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-18)
+See: .planning/PROJECT.md (updated 2026-03-20)
 
-**Core value:** Every enterprise feature documented with practical REST API examples, option explanations, and complete request/response flows
-**Current focus:** v1.1 Practical API Enhancement — SHIPPED. Planning next milestone.
+**Core value:** Every enterprise feature documented with practical REST API examples, option explanations, and complete request/response flows -- verified against source code
+**Current focus:** v1.2 Source-Verified Documentation Enhancement -- Phase 9 executing
 
 ## Current Position
 
-Milestone: v1.1 Practical API Enhancement — COMPLETE
-All phases shipped: 6 (AI Gateway), 7 (Security Gateway), 8 (Network Gateway)
-Last activity: 2026-03-18 — Milestone v1.1 completed and archived
+Phase: 9 of 12 (AI Gateway Enhancement)
+Plan: 09-01 complete, 09-02 in progress
+Status: Executing Wave 1
+Last activity: 2026-03-20 -- Plan 09-01 complete (overview, kv-caching, vllm-integration enhanced)
 
-Progress: [████████████████████] 100% of v1.1 (3/3 phases)
+Progress: [##░░░░░░░░] 8%
 
 ## Performance Metrics
 
 **Velocity:**
-- v1.0: 19 plans completed across 5 phases (2026-03-17 → 2026-03-18)
-- v1.1: 9 plans completed across 3 phases (2026-03-18, ~1.5 hours)
+- Total plans completed: 1 (v1.2)
+- Average duration: 12 min
+- Total execution time: 12 min
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 9 | 1/3 | 12min | 12min |
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
 ### Decisions
 
-- REST API is primary config method (CLI incomplete for enterprise features)
-- Remove source-code line annotations from all gateway pages
-- Add full request + response JSON examples for every configurable feature
-- Cross-link every feature to reference/api.md spec section
-- Phases 6-8 executed in parallel (any order)
-- Group by gateway (not by requirement type) — all 5 enhancements applied per page
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- v1.2 roadmap: Security Gateway split into Part 1 (SECGW-01..06) and Part 2 (SECGW-07..12) -- 12 pages too large for single phase
+- v1.2 roadmap: Phases 9-12 are independent pillars -- can be planned and executed concurrently
+- v1.2 standard: 4 reference pages (llm-routing, mcp-gateway, api-key-management, sse-quota-management) define quality bar
+- 09-01: Documented CBOR encoding and Merkle-like chain hashing from sockproxy_kv_exact.c
+- 09-01: Added "When NOT to Use" guidance for sel:9 vs other algorithms
 
 ### Pending Todos
 
@@ -51,11 +63,10 @@ None.
 
 ### Blockers/Concerns
 
-- 10 tech debt items total (6 from v1.1, 4 from v1.0) — all non-blocking
-- See milestones/v1.1-MILESTONE-AUDIT.md and milestones/v1.0-MILESTONE-AUDIT.md
+- 10 tech debt items total (6 from v1.1, 4 from v1.0) -- all non-blocking
 
 ## Session Continuity
 
-Last session: 2026-03-18
-Stopped at: v1.1 milestone completed and archived
+Last session: 2026-03-20
+Stopped at: Plan 09-01 complete, executing Plan 09-02 (model LB, PD disagg, AWS KV cache)
 Resume file: None

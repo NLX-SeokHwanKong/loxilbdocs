@@ -60,7 +60,7 @@
 **Plans**: 3 plans
 
 Plans:
-- [ ] 09-01: Enhance AI Gateway overview, KV caching, and vLLM integration
+- [x] 09-01: Enhance AI Gateway overview, KV caching, and vLLM integration
 - [ ] 09-02: Enhance model load balancing, PD disaggregation, and AWS KV cache
 - [ ] 09-03: Enhance AI Gateway configuration reference
 
@@ -127,7 +127,7 @@ Phases 9-12 are independent and can execute concurrently. Recommended order if s
 | 6. AI Gateway API Enhancement | v1.1 | 3/3 | Complete | 2026-03-18 |
 | 7. Security Gateway API Enhancement | v1.1 | 3/3 | Complete | 2026-03-18 |
 | 8. Network Gateway API Enhancement | v1.1 | 3/3 | Complete | 2026-03-18 |
-| 9. AI Gateway Enhancement | v1.2 | 0/3 | Not started | - |
+| 9. AI Gateway Enhancement | v1.2 | 1/3 | In Progress | - |
 | 10. Security Gateway Enhancement (Part 1) | v1.2 | 0/3 | Not started | - |
 | 11. Security Gateway Enhancement (Part 2) | v1.2 | 0/3 | Not started | - |
 | 12. Network Gateway Enhancement | v1.2 | 0/3 | Not started | - |
