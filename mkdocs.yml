@@ -44,7 +44,7 @@ nav:
   - Home: index.md
   - Concepts:
       - Unified Gateway Platform: concepts/unified-gateway.md
-      - Architecture: concepts/architecture.md
+    #   - Architecture: concepts/architecture.md
   - Getting Started:
       - Installation: getting-started/installation.md
       - Quick Start: getting-started/quickstart.md
@@ -124,7 +124,8 @@ nav:
   - AI Gateway:
       - AI Gateway:
           - Overview: ai-gateway/overview.md
-          - "AI Gateway: Routing & Access Control":              
+          - "AI Gateway: Routing & Access Control":       
+              - Model Load Balancing: ai-gateway/model-load-balancing.md       
               - LLM Routing: ai-gateway/llm-routing.md
               - MCP Routing: ai-gateway/mcp-gateway.md
               - API Key Management: ai-gateway/api-key-management.md
@@ -133,7 +134,6 @@ nav:
           - "AI Gateway: GPU & vLLM Integration":
               - vLLM Integration: ai-gateway/vllm-integration.md
               - KV Cache Routing: ai-gateway/kv-caching.md
-              - Model Load Balancing: ai-gateway/model-load-balancing.md
               - PD Disaggregation: ai-gateway/pd-disaggregation.md
               - AWS KV Cache Deployment: ai-gateway/aws-kv-cache.md
       - Security Gateway:
@@ -162,7 +162,7 @@ nav:
           - "Network Gateway: Proxy & Protocol":
               - HTTPS Proxy Modes: network-gateway/https-proxy.md
               - HTTP/2 Proxy: network-gateway/http2-proxy.md
-              - SCTP Multi-homing: network-gateway/sctp-multihoming.md
+            #   - SCTP Multi-homing: network-gateway/sctp-multihoming.md
   - Operations:
       - User Management: operations/user-management.md
       - Monitoring Setup: operations/monitoring.md

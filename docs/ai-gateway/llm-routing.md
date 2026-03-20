@@ -8,6 +8,51 @@ loxilb-enterprise routes LLM inference requests intelligently across your GPU fl
 
 ---
 
+## How This Page Fits Into the Bigger Picture
+
+AI Gateway routing happens in **two sequential stages**. It helps to understand where this page fits before diving into the details:
+
+```mermaid
+flowchart LR
+    REQ(["Incoming Request\n`model: llama3-70b`"])
+
+    subgraph stage1 ["Stage 1 — Model Pool Selection  (model-load-balancing.md)"]
+        MP{"Which model pool\nshould handle this?"}
+        P1["A100-80GB pool\n(llama3-70b)"]
+        P2["L4 GPU pool\n(llama3-8b)"]
+    end
+
+    subgraph stage2 ["Stage 2 — GPU Selection within Pool  ← YOU ARE HERE"]
+        direction TB
+        T0["Tier 0: Session Stickiness"]
+        T1["Tier 1.5: KV Block-Hash Match"]
+        T2["Tier 2: GPU Queue-Depth Scoring"]
+        T3["Tier 3: CHWBL Consistent Hash"]
+        T0 --> T1 --> T2 --> T3
+    end
+
+    OUT(["Selected GPU Endpoint"])
+
+    REQ --> MP
+    MP -->|"llama3-70b"| P1
+    MP -->|"llama3-8b"| P2
+    P1 --> T0
+    stage2 --> OUT
+
+    style stage1 fill:#e1f5fe,stroke:#0288d1
+    style stage2 fill:#e8f5e9,stroke:#43a047
+```
+
+| Stage | Question Answered | Key Config | Covered In |
+|---|---|---|---|
+| **Stage 1** — Model Pool Selection | *Which backend pool handles this model?* | `model_name` on the LB rule | [Model Load Balancing](model-load-balancing.md) |
+| **Stage 2** — GPU Selection within Pool | *Which specific GPU gets this request?* | `sel` field (`8` / `9` / `10`) | **This page** |
+
+!!! tip "Read both pages together"
+    Every request passes through both stages. Model Load Balancing dispatches to the right pool first; LLM Routing then picks the best GPU within that pool. Neither page replaces the other.
+
+---
+
 ## Why Standard Load Balancers Break LLM Inference
 
 LLM inference is stateful. Every GPU processing a conversation builds a **KV cache** — the model's working memory stored in VRAM that represents everything seen so far in that conversation. This cache is what makes follow-up responses fast.
@@ -272,7 +317,10 @@ This tier requires no configuration. Use `sel: 8` to use CHWBL as the **primary*
 
 ---
 
-## Model-Name Routing
+## Model-Name Routing (Stage 1 — Recap)
+
+!!! info "This is Stage 1 — handled before GPU selection"
+    Model-name routing runs **before** any of the four tiers above. It routes the request to the correct backend pool based on which model was requested. The four-tier cascade (this page) then runs **within** that pool to pick the individual GPU. See [Model Load Balancing](model-load-balancing.md) for full configuration examples.
 
 The AI Gateway supports **per-model endpoint pools** on the same VIP and port. Different GPU tiers serve different models under a single API endpoint — clients use the standard `"model"` field and loxilb routes to the matching pool.
 
@@ -796,6 +844,7 @@ curl http://loxilb-host:11111/netlox/v1/config/gpu/status
 
 ## See Also
 
+- [Model Load Balancing](model-load-balancing.md) — **Stage 1**: Route requests to the right model pool before GPU selection runs
 - [AI Gateway Overview](overview.md) — Feature overview and traffic flow diagram
 - [KV Caching](kv-caching.md) — KV-exact routing configuration and tokenizer setup
 - [vLLM Integration](vllm-integration.md) — GPU metrics scraping setup

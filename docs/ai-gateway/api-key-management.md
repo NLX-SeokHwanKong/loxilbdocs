@@ -39,7 +39,7 @@ flowchart TB
         TT["tenant_ratelimits table"]
     end
 
-    subgraph DP ["Data Plane (sockproxy)"]
+    subgraph DP ["Data Plane (loxilb-enterprise-dp)"]
         direction LR
         EXT["Extract\nX-Api-Key header"]
         VAL["llb_ai_validate_key()\nGo ↔ C CGO bridge"]
@@ -89,7 +89,7 @@ When a request hits an AI Gateway endpoint, sockproxy performs two sequential ch
 sequenceDiagram
     autonumber
     participant C as AI Client
-    participant S as sockproxy (data plane)
+    participant S as loxilb-enterprise (data plane)
     participant G as llb_ai_validate_key (Go)
     participant R as llb_ai_ratelimit_check (Go)
     participant B as LLM Backend

@@ -44,13 +44,13 @@ Requirements for Source-Verified Documentation Enhancement. Each page enhanced t
 
 ### Network Gateway Enhancement
 
-- [ ] **NETGW-01**: overview.md enhanced with architecture diagram and deep internals
-- [ ] **NETGW-02**: egress-lb.md enhanced with Mermaid diagrams, config options, source-verified fields
-- [ ] **NETGW-03**: dsr.md enhanced with Mermaid diagrams, config options, source-verified fields
-- [ ] **NETGW-04**: nat64.md enhanced with Mermaid diagrams, config options, source-verified fields
-- [ ] **NETGW-05**: https-proxy.md enhanced with Mermaid diagrams, config options, source-verified from sockproxy_ssl.c
-- [ ] **NETGW-06**: http2-proxy.md enhanced with Mermaid diagrams, config options, source-verified from sockproxy_h2.c
-- [ ] **NETGW-07**: sctp-multihoming.md enhanced with Mermaid diagrams, config options, source-verified fields
+- [x] **NETGW-01**: overview.md enhanced with architecture diagram and deep internals
+- [x] **NETGW-02**: egress-lb.md enhanced with Mermaid diagrams, config options, source-verified fields
+- [x] **NETGW-03**: dsr.md enhanced with Mermaid diagrams, config options, source-verified fields
+- [x] **NETGW-04**: nat64.md enhanced with Mermaid diagrams, config options, source-verified fields
+- [x] **NETGW-05**: https-proxy.md enhanced with Mermaid diagrams, config options, source-verified from sockproxy_ssl.c
+- [x] **NETGW-06**: http2-proxy.md enhanced with Mermaid diagrams, config options, source-verified from sockproxy_h2.c
+- [x] **NETGW-07**: sctp-multihoming.md enhanced with Mermaid diagrams, config options, source-verified fields
 
 ## Future Requirements
 
@@ -95,13 +95,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SECGW-10 | Phase 11 | Pending |
 | SECGW-11 | Phase 11 | Pending |
 | SECGW-12 | Phase 11 | Pending |
-| NETGW-01 | Phase 12 | Pending |
-| NETGW-02 | Phase 12 | Pending |
-| NETGW-03 | Phase 12 | Pending |
-| NETGW-04 | Phase 12 | Pending |
-| NETGW-05 | Phase 12 | Pending |
-| NETGW-06 | Phase 12 | Pending |
-| NETGW-07 | Phase 12 | Pending |
+| NETGW-01 | Phase 12 | Complete |
+| NETGW-02 | Phase 12 | Complete |
+| NETGW-03 | Phase 12 | Complete |
+| NETGW-04 | Phase 12 | Complete |
+| NETGW-05 | Phase 12 | Complete |
+| NETGW-06 | Phase 12 | Complete |
+| NETGW-07 | Phase 12 | Complete |
 
 **Coverage:**
 - v1.2 requirements: 26 total
